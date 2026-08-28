@@ -174,6 +174,7 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 			COUNT(CASE WHEN overload_until IS NOT NULL AND overload_until > $4 THEN 1 END) as overload_accounts
 		FROM accounts
 		WHERE deleted_at IS NULL
+		  AND platform <> 'huggingface'
 	`
 	if err := scanSingleRow(
 		ctx,

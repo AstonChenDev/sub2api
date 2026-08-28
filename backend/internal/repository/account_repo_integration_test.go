@@ -314,6 +314,47 @@ func (s *AccountRepoSuite) TestList() {
 	s.Require().Equal(int64(2), page.Total)
 }
 
+func (s *AccountRepoSuite) TestGenericListsExcludeDedicatedHuggingFaceCredentials() {
+	normal := mustCreateAccount(s.T(), s.client, &service.Account{Name: "normal-account"})
+	hfCredential := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "hidden-hf-credential",
+		Platform: service.PlatformHuggingFace,
+		Type:     service.AccountTypeAPIKey,
+	})
+
+	accounts, page, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(accounts, 1)
+	s.Require().Equal(normal.ID, accounts[0].ID)
+
+	accounts, page, err = s.repo.ListWithFilters(
+		s.ctx,
+		pagination.PaginationParams{Page: 1, PageSize: 10},
+		service.PlatformHuggingFace, "", "", "", 0, "",
+	)
+	s.Require().NoError(err)
+	s.Require().Zero(page.Total)
+	s.Require().Empty(accounts)
+
+	opsAccounts, err := s.repo.ListOpsAccountsForStats(s.ctx, "", nil)
+	s.Require().NoError(err)
+	s.Require().Len(opsAccounts, 1)
+	s.Require().Equal(normal.ID, opsAccounts[0].ID)
+
+	hasHF, err := s.repo.HasHuggingFaceAccounts(s.ctx, []int64{normal.ID, hfCredential.ID})
+	s.Require().NoError(err)
+	s.Require().True(hasHF)
+
+	disabled := false
+	rows, err := s.repo.BulkUpdate(s.ctx, []int64{hfCredential.ID}, service.AccountBulkUpdate{Schedulable: &disabled})
+	s.Require().NoError(err)
+	s.Require().Zero(rows)
+	stored, err := s.repo.GetByID(s.ctx, hfCredential.ID)
+	s.Require().NoError(err)
+	s.Require().True(stored.Schedulable)
+}
+
 func (s *AccountRepoSuite) TestListOAuthRefreshCandidatePage_GrokCursorAndExclusions() {
 	now := time.Now().UTC()
 	valid1 := mustCreateAccount(s.T(), s.client, &service.Account{

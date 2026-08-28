@@ -57,6 +57,13 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini  int
 	cfg                       *config.Config
 	settingService            *service.SettingService
+	huggingFace               *service.HuggingFaceService
+}
+
+func (h *GatewayHandler) SetHuggingFaceService(hf *service.HuggingFaceService) {
+	if h != nil {
+		h.huggingFace = hf
+	}
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -1099,6 +1106,18 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			return
 		}
 		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		return
+	}
+	if platform == service.PlatformHuggingFace && h.huggingFace != nil && groupID != nil {
+		models, err := h.huggingFace.ListModels(c.Request.Context(), *groupID)
+		if err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Failed to list Hugging Face models")
+			return
+		}
+		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
+			models = filterModelsByCustomList(models, nil, apiKey.Group.ModelsListConfig.Models)
+		}
+		writeModelsList(c, platform, models)
 		return
 	}
 

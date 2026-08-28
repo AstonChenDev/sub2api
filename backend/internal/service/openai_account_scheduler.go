@@ -2159,6 +2159,9 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	if platform == PlatformHuggingFace {
+		return s.selectHuggingFaceAccount(ctx, groupID, requestedModel, excludedIDs)
+	}
 	selection, decision, err := s.selectAccountWithSchedulerOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err
@@ -2176,6 +2179,59 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	}
 	s.logOpenAIProxyStreamQuarantineFailOpen(requestedModel, blocked)
 	return s.selectAccountWithSchedulerOnce(withOpenAIProxyStreamQuarantineBypass(ctx), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+}
+
+func (s *OpenAIGatewayService) selectHuggingFaceAccount(
+	ctx context.Context,
+	groupID *int64,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerLoadBalance}
+	if s == nil || s.huggingFace == nil || !s.huggingFace.Enabled() {
+		return nil, decision, ErrHFFeatureDisabled
+	}
+	ctx = s.withOpenAIProfitControlGate(ctx, groupID)
+	candidates, err := s.huggingFace.CandidateAccounts(ctx, groupID, requestedModel, excludedIDs)
+	if err != nil {
+		return nil, decision, err
+	}
+	var firstBusy *Account
+	for _, account := range candidates {
+		if account == nil {
+			continue
+		}
+		if vetoed, _ := openAIProfitControlVetoReason(ctx, account); vetoed {
+			continue
+		}
+		result, acquireErr := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		if acquireErr != nil {
+			return nil, decision, acquireErr
+		}
+		if result != nil && result.Acquired {
+			decision.SelectedAccountID = account.ID
+			decision.SelectedAccountType = account.Type
+			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
+				Account: account, Acquired: true, ReleaseFunc: result.ReleaseFunc,
+			}), decision, nil
+		}
+		if firstBusy == nil {
+			firstBusy = account
+		}
+	}
+	if firstBusy != nil && s.concurrencyService != nil {
+		cfg := s.schedulingConfig()
+		decision.SelectedAccountID = firstBusy.ID
+		decision.SelectedAccountType = firstBusy.Type
+		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
+			Account: firstBusy,
+			WaitPlan: &AccountWaitPlan{
+				AccountID: firstBusy.ID, MaxConcurrency: firstBusy.Concurrency,
+				Timeout: cfg.FallbackWaitTimeout, MaxWaiting: cfg.FallbackMaxWaiting,
+			},
+		}), decision, nil
+	}
+	return nil, decision, ErrHFPoolHasNoCandidates
 }
 
 type openAIGroupPrivacyRequirementContextKey struct{}

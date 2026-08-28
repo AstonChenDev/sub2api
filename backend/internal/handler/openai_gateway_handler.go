@@ -274,7 +274,7 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 	// 协议账号原生直通 Claude Code),无需 allow_messages_dispatch 开关授权——
 	// 该开关对非 openai/composite 平台恒被 sanitizeGroupMessagesDispatchFields 置 false,
 	// 若不豁免,CN 分组将永远 403。
-	if service.IsCNProvider(apiKey.Group.Platform) {
+	if service.IsCNProvider(apiKey.Group.Platform) || apiKey.Group.Platform == service.PlatformHuggingFace {
 		return true
 	}
 	// composite 分组解析到 grok/CN 目标时与对应独立分组同语义豁免；
@@ -291,7 +291,8 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 func openAICompatibleTextTargetAllowed(c *gin.Context, apiKey *service.APIKey, model string) bool {
 	return compositeTargetPlatformAllowed(c, apiKey, model,
 		service.PlatformOpenAI, service.PlatformGrok,
-		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek)
+		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
+		service.PlatformHuggingFace)
 }
 
 // isResponsesWebSocketCompositePlatform 限定 composite 分组在 Responses WebSocket
@@ -573,6 +574,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	requireCompact := legacyCompact
 
 	maxAccountSwitches := h.maxAccountSwitches
+	if requestPlatform == service.PlatformHuggingFace {
+		maxAccountSwitches = h.gatewayService.HuggingFaceMaxAccountSwitches()
+	}
 	switchCount := 0
 	firstOutputTimeoutSwitchCount := 0
 	profitVetoCount := 0
@@ -1189,6 +1193,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 
 	maxAccountSwitches := h.maxAccountSwitches
+	if requestPlatform == service.PlatformHuggingFace {
+		maxAccountSwitches = h.gatewayService.HuggingFaceMaxAccountSwitches()
+	}
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
@@ -1824,6 +1831,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		return
+	}
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformHuggingFace {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Hugging Face pools support HTTP/SSE requests, not Responses WebSocket")
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
@@ -2927,6 +2938,17 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Reason == service.HFFailoverReason {
+		status := failoverErr.ClientStatusCode
+		if status <= 0 {
+			status = http.StatusServiceUnavailable
+		}
+		message := strings.TrimSpace(failoverErr.ClientMessage)
+		if message == "" {
+			message = "Hugging Face pool is temporarily unavailable"
+		}
+		return status, message
+	}
 	if failoverErr != nil && failoverErr.Reason == service.OpenAIUpstreamAccessStateReason && strings.TrimSpace(failoverErr.ClientMessage) != "" {
 		status := failoverErr.ClientStatusCode
 		if status <= 0 {

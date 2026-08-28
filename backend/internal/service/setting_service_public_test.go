@@ -101,6 +101,19 @@ func TestSettingService_GetPublicSettings_ExposesCompactHomeEnabled(t *testing.T
 	require.False(t, missingSettings.CompactHomeEnabled)
 }
 
+func TestSettingService_GetPublicSettings_ExposesHuggingFaceConfigFlag(t *testing.T) {
+	repo := &settingPublicRepoStub{values: map[string]string{}}
+	disabled, err := NewSettingService(repo, &config.Config{}).GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.False(t, disabled.HuggingFaceEnabled)
+
+	enabled, err := NewSettingService(repo, &config.Config{
+		HuggingFace: config.HuggingFaceConfig{Enabled: true},
+	}).GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.True(t, enabled.HuggingFaceEnabled)
+}
+
 func TestSettingService_ChannelMonitorHideThroughputDefaultsToPrivate(t *testing.T) {
 	missing := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{}).GetChannelMonitorRuntime(context.Background())
 	require.True(t, missing.HideThroughput)

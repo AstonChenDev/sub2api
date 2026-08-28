@@ -301,6 +301,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	if platform == PlatformHuggingFace && (s.settingService == nil || s.settingService.cfg == nil || !s.settingService.cfg.HuggingFace.Enabled) {
+		return nil, ErrHFFeatureDisabled
+	}
 	modelPricing, err := normalizeGroupModelPricing(platform, input.ModelPricing)
 	if err != nil {
 		return nil, err
@@ -651,6 +654,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.Description = *input.Description
 	}
 	if input.Platform != "" {
+		if input.Platform != group.Platform && (input.Platform == PlatformHuggingFace || group.Platform == PlatformHuggingFace) {
+			return nil, infraerrors.BadRequest("HF_GROUP_PLATFORM_IMMUTABLE", "a Hugging Face group cannot be converted to or from another platform")
+		}
 		group.Platform = input.Platform
 	}
 	if input.RateMultiplier != nil {

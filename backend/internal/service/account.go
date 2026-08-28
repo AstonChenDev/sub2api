@@ -285,6 +285,10 @@ func (a *Account) IsDeepseek() bool {
 	return a.Platform == PlatformDeepseek
 }
 
+func (a *Account) IsHuggingFace() bool {
+	return a != nil && a.Platform == PlatformHuggingFace
+}
+
 // IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）。
 func (a *Account) IsCNProvider() bool {
 	return a != nil && IsCNProvider(a.Platform)
@@ -295,7 +299,38 @@ func (a *Account) IsCNProvider() bool {
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
-		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek)
+		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek ||
+		a.Platform == PlatformHuggingFace)
+}
+
+func (a *Account) HuggingFacePoolID() int64 {
+	if !a.IsHuggingFace() || a.Extra == nil {
+		return 0
+	}
+	switch value := a.Extra["hf_pool_id"].(type) {
+	case string:
+		id, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return id
+	case json.Number:
+		id, _ := value.Int64()
+		return id
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
+func (a *Account) HuggingFaceFingerprint() string {
+	if !a.IsHuggingFace() || a.Extra == nil {
+		return ""
+	}
+	value, _ := a.Extra["hf_token_fingerprint"].(string)
+	return strings.TrimSpace(value)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1333,7 +1368,7 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai 与国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）；grok 走 GetGrokBaseURL，
 // 此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	if !a.IsOpenAI() && !a.IsCNProvider() {
+	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsHuggingFace() {
 		return ""
 	}
 	if a.IsCNProvider() && a.IsAdaptiveAPIProtocol() {
@@ -1350,6 +1385,8 @@ func (a *Account) GetOpenAIBaseURL() string {
 	}
 	// 平台默认 base_url：CN 供应商按 account_mode 选择 payg / coding 默认值。
 	switch a.Platform {
+	case PlatformHuggingFace:
+		return HFDefaultBaseURL
 	case PlatformKimi:
 		if a.GetAccountMode() == AccountModeCoding {
 			return DefaultKimiCodingBaseURL
@@ -1676,7 +1713,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if a.IsCNProvider() {
+	if a.IsCNProvider() || a.IsHuggingFace() {
 		if a.Type != AccountTypeAPIKey {
 			return ""
 		}

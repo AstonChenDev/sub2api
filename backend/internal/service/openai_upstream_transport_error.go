@@ -134,6 +134,13 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	if errors.As(err, &pluginErr) && pluginErr.RequestSent {
 		return err
 	}
+	// HF owns an independent durable cooldown/index lifecycle. Never write it
+	// through the legacy OpenAI temp-unschedulable path; the raw caller records
+	// the same transport failure through HuggingFaceService immediately after
+	// this typed failover is returned.
+	if account.IsHuggingFace() {
+		return &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: openAITransportFailoverBody}
+	}
 
 	if classifyUpstreamTransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)

@@ -146,6 +146,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 
 	maxAccountSwitches := h.maxAccountSwitches
+	if requestPlatform == service.PlatformHuggingFace {
+		maxAccountSwitches = h.gatewayService.HuggingFaceMaxAccountSwitches()
+	}
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})

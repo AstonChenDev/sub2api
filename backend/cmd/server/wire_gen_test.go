@@ -84,6 +84,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		geminiOAuthSvc,
 		antigravityOAuthSvc,
 		nil, // grokOAuth
+		nil, // huggingFace
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // backupSvc

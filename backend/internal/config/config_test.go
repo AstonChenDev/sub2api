@@ -79,6 +79,32 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestHuggingFaceConfigIsOptInAndRequiresPersistentEncryptionKey(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.HuggingFace.Enabled)
+	})
+
+	t.Run("enabled rejects missing key", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("HUGGINGFACE_ENABLED", "true")
+		_, err := Load()
+		require.ErrorContains(t, err, "huggingface.encryption_key")
+	})
+
+	t.Run("enabled accepts stable 32 byte key", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("HUGGINGFACE_ENABLED", "true")
+		t.Setenv("HUGGINGFACE_ENCRYPTION_KEY", strings.Repeat("ab", 32))
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.HuggingFace.Enabled)
+		require.Equal(t, 64, cfg.HuggingFace.CandidatePoolSize)
+	})
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")

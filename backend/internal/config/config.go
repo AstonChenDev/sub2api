@@ -104,6 +104,28 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	HuggingFace             HuggingFaceConfig             `mapstructure:"huggingface"`
+}
+
+// HuggingFaceConfig controls the opt-in, isolated Hugging Face key-pool
+// scheduler. The zero value keeps the feature completely disabled so existing
+// installations retain their current routing behavior.
+type HuggingFaceConfig struct {
+	Enabled                     bool     `mapstructure:"enabled"`
+	EncryptionKey               string   `mapstructure:"encryption_key"`
+	AllowedBaseURLs             []string `mapstructure:"allowed_base_urls"`
+	CandidatePoolSize           int      `mapstructure:"candidate_pool_size"`
+	CandidateScanSize           int      `mapstructure:"candidate_scan_size"`
+	MaxAccountSwitches          int      `mapstructure:"max_account_switches"`
+	PoolMetadataCacheSeconds    int      `mapstructure:"pool_metadata_cache_seconds"`
+	RateLimitCooldownSeconds    int      `mapstructure:"rate_limit_cooldown_seconds"`
+	BillingCooldownSeconds      int      `mapstructure:"billing_cooldown_seconds"`
+	TransientCooldownSeconds    int      `mapstructure:"transient_cooldown_seconds"`
+	MaxRetryAfterSeconds        int      `mapstructure:"max_retry_after_seconds"`
+	RecoveryScanIntervalSeconds int      `mapstructure:"recovery_scan_interval_seconds"`
+	ReconcileIntervalSeconds    int      `mapstructure:"reconcile_interval_seconds"`
+	MonthlyRecoveryTimezone     string   `mapstructure:"monthly_recovery_timezone"`
+	MonthlyRecoveryHour         int      `mapstructure:"monthly_recovery_hour"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2265,6 +2287,24 @@ func setDefaults() {
 	// TOTP
 	viper.SetDefault("totp.encryption_key", "")
 
+	// Hugging Face bounded key pools are opt-in and have an independent secret.
+	// Register every key so AutomaticEnv can populate a config-less deployment.
+	viper.SetDefault("huggingface.enabled", false)
+	viper.SetDefault("huggingface.encryption_key", "")
+	viper.SetDefault("huggingface.allowed_base_urls", []string{"https://router.huggingface.co"})
+	viper.SetDefault("huggingface.candidate_pool_size", 64)
+	viper.SetDefault("huggingface.candidate_scan_size", 128)
+	viper.SetDefault("huggingface.max_account_switches", 3)
+	viper.SetDefault("huggingface.pool_metadata_cache_seconds", 5)
+	viper.SetDefault("huggingface.rate_limit_cooldown_seconds", 30)
+	viper.SetDefault("huggingface.billing_cooldown_seconds", 300)
+	viper.SetDefault("huggingface.transient_cooldown_seconds", 15)
+	viper.SetDefault("huggingface.max_retry_after_seconds", 3600)
+	viper.SetDefault("huggingface.recovery_scan_interval_seconds", 60)
+	viper.SetDefault("huggingface.reconcile_interval_seconds", 600)
+	viper.SetDefault("huggingface.monthly_recovery_timezone", "Asia/Shanghai")
+	viper.SetDefault("huggingface.monthly_recovery_hour", 9)
+
 	// Default
 	// Admin credentials are created via the setup flow (web wizard / CLI / AUTO_SETUP).
 	// Do not ship fixed defaults here to avoid insecure "known credentials" in production.
@@ -2712,6 +2752,61 @@ func (c *Config) Validate() error {
 	// 选择 bytes 而不是 rune 计数，确保二进制/随机串的长度语义更接近“熵”而非“字符数”。
 	if len([]byte(jwtSecret)) < 32 {
 		return fmt.Errorf("jwt.secret must be at least 32 bytes")
+	}
+	if c.HuggingFace.Enabled {
+		key := strings.TrimSpace(c.HuggingFace.EncryptionKey)
+		decoded, err := hex.DecodeString(key)
+		if err != nil || len(decoded) != 32 {
+			return fmt.Errorf("huggingface.encryption_key must be exactly 32 bytes encoded as 64 hexadecimal characters when huggingface.enabled=true")
+		}
+		if len(c.HuggingFace.AllowedBaseURLs) == 0 {
+			return fmt.Errorf("huggingface.allowed_base_urls must not be empty when huggingface.enabled=true")
+		}
+		for _, rawBaseURL := range c.HuggingFace.AllowedBaseURLs {
+			parsed, parseErr := url.Parse(strings.TrimRight(strings.TrimSpace(rawBaseURL), "/"))
+			if parseErr != nil || parsed == nil {
+				return fmt.Errorf("huggingface.allowed_base_urls contains an invalid HTTPS origin: %q", rawBaseURL)
+			}
+			path := strings.TrimRight(parsed.EscapedPath(), "/")
+			if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+				parsed.RawQuery != "" || parsed.Fragment != "" || (path != "" && path != "/v1") {
+				return fmt.Errorf("huggingface.allowed_base_urls contains an invalid HTTPS origin: %q", rawBaseURL)
+			}
+		}
+		if c.HuggingFace.CandidatePoolSize < 1 || c.HuggingFace.CandidatePoolSize > 512 {
+			return fmt.Errorf("huggingface.candidate_pool_size must be between 1 and 512")
+		}
+		if c.HuggingFace.CandidateScanSize < c.HuggingFace.CandidatePoolSize || c.HuggingFace.CandidateScanSize > 2048 {
+			return fmt.Errorf("huggingface.candidate_scan_size must be between candidate_pool_size and 2048")
+		}
+		if c.HuggingFace.MaxAccountSwitches < 0 || c.HuggingFace.MaxAccountSwitches > 19 {
+			return fmt.Errorf("huggingface.max_account_switches must be between 0 and 19")
+		}
+		if c.HuggingFace.PoolMetadataCacheSeconds < 1 || c.HuggingFace.PoolMetadataCacheSeconds > 300 {
+			return fmt.Errorf("huggingface.pool_metadata_cache_seconds must be between 1 and 300")
+		}
+		for name, value := range map[string]int{
+			"rate_limit_cooldown_seconds": c.HuggingFace.RateLimitCooldownSeconds,
+			"billing_cooldown_seconds":    c.HuggingFace.BillingCooldownSeconds,
+			"transient_cooldown_seconds":  c.HuggingFace.TransientCooldownSeconds,
+			"max_retry_after_seconds":     c.HuggingFace.MaxRetryAfterSeconds,
+		} {
+			if value < 1 || value > 604800 {
+				return fmt.Errorf("huggingface.%s must be between 1 and 604800", name)
+			}
+		}
+		if c.HuggingFace.RecoveryScanIntervalSeconds < 1 || c.HuggingFace.RecoveryScanIntervalSeconds > 86400 {
+			return fmt.Errorf("huggingface.recovery_scan_interval_seconds must be between 1 and 86400")
+		}
+		if c.HuggingFace.ReconcileIntervalSeconds < 30 || c.HuggingFace.ReconcileIntervalSeconds > 604800 {
+			return fmt.Errorf("huggingface.reconcile_interval_seconds must be between 30 and 604800")
+		}
+		if c.HuggingFace.MonthlyRecoveryHour < 0 || c.HuggingFace.MonthlyRecoveryHour > 23 {
+			return fmt.Errorf("huggingface.monthly_recovery_hour must be between 0 and 23")
+		}
+		if _, err := time.LoadLocation(strings.TrimSpace(c.HuggingFace.MonthlyRecoveryTimezone)); err != nil {
+			return fmt.Errorf("huggingface.monthly_recovery_timezone: %w", err)
+		}
 	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":

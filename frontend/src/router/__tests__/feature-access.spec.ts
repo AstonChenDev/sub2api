@@ -25,6 +25,7 @@ const appStore = vi.hoisted(() => ({
   cachedPublicSettings: null as null | {
     payment_enabled?: boolean
     risk_control_enabled?: boolean
+    huggingface_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -142,8 +143,9 @@ describe('feature route guard', () => {
   it.each([
     ['payment', { requiresPayment: true }, '/purchase'],
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
+    ['Hugging Face', { requiresHuggingFace: true }, '/admin/huggingface-pools'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
+    authStore.isAdmin = meta.requiresRiskControl === true || meta.requiresHuggingFace === true
     appStore.fetchPublicSettings.mockResolvedValue(null)
 
     const { navigation, next } = runGuard(meta, path)
@@ -162,8 +164,14 @@ describe('feature route guard', () => {
       { risk_control_enabled: false },
       '/admin/settings',
     ],
+    [
+      'Hugging Face',
+      { requiresHuggingFace: true },
+      { huggingface_enabled: false },
+      '/admin/dashboard',
+    ],
   ])('redirects when loaded settings explicitly disable %s', async (_name, meta, settings, target) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
+    authStore.isAdmin = meta.requiresRiskControl === true || meta.requiresHuggingFace === true
     appStore.cachedPublicSettings = settings
     appStore.publicSettingsLoaded = true
 

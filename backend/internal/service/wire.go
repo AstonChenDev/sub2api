@@ -817,6 +817,19 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideHuggingFaceService(
+	repo HuggingFaceRepository,
+	cache HuggingFaceCache,
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	protector HFCredentialProtector,
+	cfg *config.Config,
+) *HuggingFaceService {
+	svc := NewHuggingFaceService(repo, cache, accountRepo, groupRepo, protector, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -841,6 +854,7 @@ var ProviderSet = wire.NewSet(
 	NewAdminService,
 	NewGatewayService,
 	NewOpenAIGatewayService,
+	ProvideHuggingFaceService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
 	ProvideBatchImageModelPricingResolver,

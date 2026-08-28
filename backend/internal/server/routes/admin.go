@@ -64,6 +64,9 @@ func RegisterAdminRoutes(
 		// 国产供应商（kimi/zhipu/deepseek）额度与余额
 		registerCNProviderRoutes(admin, h)
 
+		// Hugging Face 专用多号池管理（不进入通用账号调度）
+		registerHuggingFaceRoutes(admin, h, stepUpAuth)
+
 		// 代理管理
 		registerProxyRoutes(admin, h, stepUpAuth)
 
@@ -130,6 +133,24 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerHuggingFaceRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	hf := admin.Group("/huggingface")
+	{
+		hf.GET("/pools", h.Admin.HuggingFace.ListPools)
+		hf.POST("/pools", h.Admin.HuggingFace.CreatePool)
+		hf.GET("/pools/:pool_id", h.Admin.HuggingFace.GetPool)
+		hf.PUT("/pools/:pool_id", h.Admin.HuggingFace.UpdatePool)
+		hf.DELETE("/pools/:pool_id", h.Admin.HuggingFace.DeletePool)
+		hf.GET("/pools/:pool_id/credentials", h.Admin.HuggingFace.ListCredentials)
+		// Import accepts upstream token plaintext and therefore requires step-up auth.
+		hf.POST("/pools/:pool_id/credentials", gin.HandlerFunc(stepUpAuth), h.Admin.HuggingFace.ImportCredentials)
+		hf.POST("/pools/:pool_id/credentials/:account_id/recover", h.Admin.HuggingFace.RecoverCredential)
+		hf.DELETE("/pools/:pool_id/credentials/:account_id", h.Admin.HuggingFace.DeleteCredential)
+		hf.POST("/pools/:pool_id/reconcile", h.Admin.HuggingFace.ReconcilePool)
+		hf.POST("/recover-due", h.Admin.HuggingFace.RecoverDue)
 	}
 }
 

@@ -789,6 +789,7 @@ import {
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
 import { GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -997,7 +998,9 @@ const groupOptions = computed(() => [
 
 const platformFilterOptions = computed(() => [
   { value: '', label: t('admin.subscriptions.allPlatforms') },
-  ...GROUP_PLATFORM_OPTIONS
+  ...GROUP_PLATFORM_OPTIONS.filter(
+    (option) => option.value !== 'huggingface' || isFeatureFlagEnabled(FeatureFlags.huggingFace)
+  )
 ])
 
 // Group options for assign (only subscription type groups)

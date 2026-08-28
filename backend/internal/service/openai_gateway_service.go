@@ -448,6 +448,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	huggingFace           *HuggingFaceService
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -488,6 +489,21 @@ type OpenAIGatewayService struct {
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
+}
+
+// SetHuggingFaceService installs the isolated HF scheduler without widening
+// NewOpenAIGatewayService's constructor (which is used by many existing tests).
+func (s *OpenAIGatewayService) SetHuggingFaceService(hf *HuggingFaceService) {
+	if s != nil {
+		s.huggingFace = hf
+	}
+}
+
+func (s *OpenAIGatewayService) HuggingFaceMaxAccountSwitches() int {
+	if s == nil || s.huggingFace == nil || !s.huggingFace.Enabled() {
+		return 0
+	}
+	return s.huggingFace.MaxAccountSwitches()
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

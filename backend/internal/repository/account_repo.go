@@ -910,7 +910,11 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 }
 
 func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
-	q := r.client.Account.Query()
+	// Hugging Face credentials are deliberately managed as a dedicated key-pool
+	// resource. Keeping them out of the generic account query prevents a large
+	// pool (100k+ keys) from changing the existing account-management semantics
+	// and from being exposed through generic bulk/export operations.
+	q := r.client.Account.Query().Where(dbaccount.PlatformNEQ(service.PlatformHuggingFace))
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -1043,12 +1047,24 @@ func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, ac
 	return r.accountsToService(ctx, accounts)
 }
 
+// HasHuggingFaceAccounts lets generic admin bulk operations reject dedicated
+// credentials without hydrating a potentially large account selection.
+func (r *accountRepository) HasHuggingFaceAccounts(ctx context.Context, ids []int64) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	return r.client.Account.Query().Where(
+		dbaccount.IDIn(ids...),
+		dbaccount.PlatformEQ(service.PlatformHuggingFace),
+	).Exist(ctx)
+}
+
 func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platformFilter string, groupIDFilter *int64) ([]service.Account, error) {
 	if r == nil || r.client == nil {
 		return []service.Account{}, nil
 	}
 
-	q := r.client.Account.Query()
+	q := r.client.Account.Query().Where(dbaccount.PlatformNEQ(service.PlatformHuggingFace))
 	if platformFilter = strings.TrimSpace(platformFilter); platformFilter != "" {
 		q = q.Where(dbaccount.PlatformEQ(platformFilter))
 	}
@@ -2969,7 +2985,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
+	// Defense in depth: HF credentials are mutable only through the dedicated
+	// repository even if a caller omits the service-level isolation check.
+	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL AND platform <> 'huggingface'"
 	args = append(args, pq.Array(ids))
 	idx++
 	if updates.ProbeEnabled != nil {

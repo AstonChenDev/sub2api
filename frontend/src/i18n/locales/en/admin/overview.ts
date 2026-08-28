@@ -956,6 +956,7 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        huggingface: 'Hugging Face',
         composite: 'Composite',
       },
       deleteConfirm:

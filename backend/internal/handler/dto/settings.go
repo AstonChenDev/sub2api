@@ -422,6 +422,7 @@ type PublicSettings struct {
 	ModelPlazaEnabled       bool `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth   bool `json:"model_plaza_require_auth"`
 	PluginManagementEnabled bool `json:"plugin_management_enabled"`
+	HuggingFaceEnabled      bool `json:"huggingface_enabled"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

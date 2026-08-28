@@ -88,6 +88,39 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamMsg string,
 	upstreamModel string,
 ) *UpstreamFailoverError {
+	// HF credentials have an isolated lifecycle. Every CC compatibility path
+	// (Responses, Messages and Chat Completions) converges here, so handle HF
+	// before the legacy OpenAI rate-limit service can mark a recoverable 402 as
+	// a permanent account error.
+	if account != nil && account.IsHuggingFace() {
+		if s == nil || s.huggingFace == nil {
+			return nil
+		}
+		failoverErr := s.huggingFace.ObserveHTTPFailure(ctx, account, resp.StatusCode, resp.Header, respBody)
+		if failoverErr == nil {
+			return nil
+		}
+		upstreamDetail := ""
+		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+			maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+			if maxBytes <= 0 {
+				maxBytes = 2048
+			}
+			upstreamDetail = truncateString(string(respBody), maxBytes)
+		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "failover",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+		return failoverErr
+	}
+
 	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
 	tempUnscheduled := false
 	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
@@ -181,6 +214,12 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	grokCacheIdentity string,
 ) (*http.Response, error) {
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	if account != nil && account.IsHuggingFace() {
+		// HF bearer tokens must never be replayed to a redirect target. Pools are
+		// already restricted to an explicit HTTPS allowlist, so redirects are both
+		// unnecessary and a credential-leak risk for custom upstream origins.
+		upstreamCtx = WithHTTPUpstreamRedirectsDisabled(upstreamCtx)
+	}
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
 	if err != nil {

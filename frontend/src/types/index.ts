@@ -277,6 +277,7 @@ export interface PublicSettings {
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
   plugin_management_enabled: boolean
+  huggingface_enabled: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
   allow_user_view_error_requests?: boolean
@@ -531,7 +532,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'huggingface' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -666,7 +667,7 @@ export interface CompositeModelRoute {
   group_id: number
   public_model: string
   match_type: CompositeRouteMatchType
-  target_platform: Exclude<GroupPlatform, 'composite'>
+  target_platform: Exclude<GroupPlatform, 'composite' | 'huggingface'>
   upstream_model: string
   endpoint: CompositeRouteEndpoint
   priority: number
@@ -679,7 +680,7 @@ export interface CompositeModelRoute {
 export interface CompositeModelRouteInput {
   public_model: string
   match_type: CompositeRouteMatchType
-  target_platform: Exclude<GroupPlatform, 'composite'>
+  target_platform: Exclude<GroupPlatform, 'composite' | 'huggingface'>
   upstream_model?: string
   endpoint: CompositeRouteEndpoint
   priority?: number
@@ -697,7 +698,7 @@ export interface CompositeRouteDecision {
   source: CompositeRouteSource
   group_id: number
   public_model: string
-  target_platform: Exclude<GroupPlatform, 'composite'> | ''
+  target_platform: Exclude<GroupPlatform, 'composite' | 'huggingface'> | ''
   upstream_model: string
   endpoint: CompositeRouteEndpoint
   route?: CompositeModelRoute

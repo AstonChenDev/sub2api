@@ -114,6 +114,11 @@ export const FeatureFlags = {
     mode: 'opt-in',
     label: 'Plugin Management',
   }),
+  huggingFace: defineFlag({
+    key: 'huggingface_enabled',
+    mode: 'opt-in',
+    label: 'Hugging Face Key Pools',
+  }),
   payment: defineFlag({
     key: 'payment_enabled',
     mode: 'opt-out',

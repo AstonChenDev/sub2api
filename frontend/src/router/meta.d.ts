@@ -55,6 +55,9 @@ declare module 'vue-router' {
      */
     requiresRiskControl?: boolean
 
+    /** Whether the dedicated Hugging Face key-pool feature is enabled. */
+    requiresHuggingFace?: boolean
+
     /**
      * i18n key for the page title
      */

@@ -4437,6 +4437,7 @@ import {
   CONCRETE_PLATFORM_OPTIONS,
   GROUP_PLATFORM_OPTIONS,
 } from "@/constants/platforms";
+import { FeatureFlags, isFeatureFlagEnabled } from "@/utils/featureFlags";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -4756,11 +4757,19 @@ const exclusiveOptions = computed(() => [
   { value: "false", label: t("admin.groups.nonExclusive") },
 ]);
 
-const platformOptions = computed(() => [...GROUP_PLATFORM_OPTIONS]);
+const enabledGroupPlatformOptions = computed(() =>
+  GROUP_PLATFORM_OPTIONS.filter(
+    (option) =>
+      option.value !== "huggingface" ||
+      isFeatureFlagEnabled(FeatureFlags.huggingFace),
+  ),
+);
+
+const platformOptions = computed(() => [...enabledGroupPlatformOptions.value]);
 
 const platformFilterOptions = computed(() => [
   { value: "", label: t("admin.groups.allPlatforms") },
-  ...GROUP_PLATFORM_OPTIONS,
+  ...enabledGroupPlatformOptions.value,
 ]);
 
 const compositeRoutePlatformOptions = computed(() => [
@@ -4984,7 +4993,7 @@ const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
-type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite">;
+type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite" | "huggingface">;
 type CompositeRouteFormState = {
   public_model: string;
   match_type: CompositeRouteMatchType;

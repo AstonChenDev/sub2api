@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -41,6 +42,19 @@ var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited
 func classifySelectionFailureError(err error, fallback noAccountErrorClassification) noAccountErrorClassification {
 	if err == nil {
 		return fallback
+	}
+	if errors.Is(err, service.ErrHFModelNotSupported) {
+		return noAccountErrorClassification{
+			Status: http.StatusNotFound, ErrType: "model_not_found",
+			Message:       "The requested model is not supported by any configured Hugging Face pool",
+			ModelNotFound: true,
+		}
+	}
+	if errors.Is(err, service.ErrHFPoolRateLimited) {
+		return noAccountErrorClassification{
+			Status: http.StatusTooManyRequests, ErrType: "rate_limit_error",
+			Message: "All matching Hugging Face pools are temporarily unavailable. Please retry later.",
+		}
 	}
 	match := selectionModelRateLimitedPattern.FindStringSubmatch(strings.ToLower(err.Error()))
 	if len(match) != 2 {

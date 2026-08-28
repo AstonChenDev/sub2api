@@ -1227,3 +1227,22 @@ image_storage:
   presign_expiry_hours: 24
   # 当上游返回的是图片 url 时，下载该图片再转存的字节上限（默认 32MB）
   max_download_bytes: 33554432
+# Dedicated Hugging Face key pools. Disabled by default; when enabled, set a
+# persistent 64-hex-character key (for example: openssl rand -hex 32).
+huggingface:
+  enabled: false
+  encryption_key: ""
+  allowed_base_urls:
+    - "https://router.huggingface.co"
+  candidate_pool_size: 64
+  candidate_scan_size: 128
+  max_account_switches: 3
+  pool_metadata_cache_seconds: 5
+  rate_limit_cooldown_seconds: 30
+  billing_cooldown_seconds: 300
+  transient_cooldown_seconds: 15
+  max_retry_after_seconds: 3600
+  recovery_scan_interval_seconds: 60
+  reconcile_interval_seconds: 600
+  monthly_recovery_timezone: "Asia/Shanghai"
+  monthly_recovery_hour: 9

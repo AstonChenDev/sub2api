@@ -48,7 +48,8 @@ func RegisterGatewayRoutes(
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
 		switch getGroupPlatform(c) {
 		case service.PlatformOpenAI, service.PlatformGrok,
-			service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek:
+			service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
+			service.PlatformHuggingFace:
 			// 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 openai/grok 一样经 OpenAI 网关转发。
 			return true
 		default:
@@ -57,7 +58,7 @@ func RegisterGatewayRoutes(
 	}
 	countTokensHandler := func(c *gin.Context) {
 		switch getGroupPlatform(c) {
-		case service.PlatformOpenAI, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek:
+		case service.PlatformOpenAI, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformHuggingFace:
 			h.OpenAIGateway.CountTokens(c)
 		case service.PlatformGrok:
 			h.OpenAIGateway.GrokCountTokens(c)
@@ -69,7 +70,7 @@ func RegisterGatewayRoutes(
 		dispatchCodexModelsGateway(c, h.OpenAIGateway.CodexModels, h.Gateway.CodexModels)
 	}
 	modelsHandler := func(c *gin.Context) {
-		if c.Query("client_version") != "" {
+		if c.Query("client_version") != "" && getGroupPlatform(c) != service.PlatformHuggingFace {
 			codexModelsHandler(c)
 			return
 		}
@@ -163,6 +164,16 @@ func RegisterGatewayRoutes(
 	// service.IsForwardableOpenAIResponsesRequestPath 及 upstream_path_guard.go。
 	guardResponsesSubpath := func(next gin.HandlerFunc) gin.HandlerFunc {
 		return func(c *gin.Context) {
+			if getGroupPlatform(c) == service.PlatformHuggingFace {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+					"error": gin.H{
+						"type":    "not_found_error",
+						"message": "Hugging Face pools support only the root Responses endpoint",
+					},
+				})
+				return
+			}
 			if !service.IsForwardableOpenAIResponsesRequestPath(c) {
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
 				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{

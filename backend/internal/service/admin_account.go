@@ -20,6 +20,22 @@ import (
 )
 
 // Account management implementations
+func huggingFaceDedicatedManagementError() error {
+	return infraerrors.Newf(http.StatusBadRequest, "HF_DEDICATED_API_REQUIRED",
+		"Hugging Face credentials must be managed through the dedicated pool API")
+}
+
+func ensureGenericManagedAccount(account *Account) error {
+	if account != nil && account.Platform == PlatformHuggingFace {
+		return huggingFaceDedicatedManagementError()
+	}
+	return nil
+}
+
+type huggingFaceAccountInspector interface {
+	HasHuggingFaceAccounts(ctx context.Context, ids []int64) (bool, error)
+}
+
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
 	accounts, result, err := s.accountRepo.ListWithFilters(ctx, params, platform, accountType, status, search, groupID, privacyMode)
@@ -47,7 +63,14 @@ func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScore(ctx co
 }
 
 func (s *adminServiceImpl) GetAccount(ctx context.Context, id int64) (*Account, error) {
-	return s.accountRepo.GetByID(ctx, id)
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return nil, err
+	}
+	return account, nil
 }
 
 func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error) {
@@ -58,6 +81,11 @@ func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([
 	accounts, err := s.accountRepo.GetByIDs(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts by IDs: %w", err)
+	}
+	for _, account := range accounts {
+		if err := ensureGenericManagedAccount(account); err != nil {
+			return nil, err
+		}
 	}
 
 	return accounts, nil
@@ -247,6 +275,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 
 	source, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureGenericManagedAccount(source); err != nil {
 		return nil, err
 	}
 	if source.IsCredentialShadow() {
@@ -462,6 +493,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if input != nil && input.Platform == PlatformHuggingFace {
+		return nil, huggingFaceDedicatedManagementError()
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -552,6 +586,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if account.Platform == PlatformHuggingFace {
+		return nil, huggingFaceDedicatedManagementError()
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
@@ -872,6 +909,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return err
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -881,10 +925,6 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
-		account, err := s.accountRepo.GetByID(ctx, id)
-		if err != nil {
-			return err
-		}
 		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
 			return err
 		}
@@ -925,6 +965,18 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
+	// The production repository provides a single indexed EXISTS query here.
+	// Keeping it as an optional capability preserves lightweight test/plugin
+	// repositories while ensuring explicit IDs cannot bypass the dedicated API.
+	if inspector, ok := s.accountRepo.(huggingFaceAccountInspector); ok {
+		hasHuggingFace, err := inspector.HasHuggingFaceAccounts(ctx, input.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		if hasHuggingFace {
+			return nil, huggingFaceDedicatedManagementError()
+		}
+	}
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
@@ -943,6 +995,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
+		}
+		for _, account := range loaded {
+			if err := ensureGenericManagedAccount(account); err != nil {
+				return nil, err
+			}
 		}
 		cachedTargets = loaded
 	}
@@ -1219,6 +1276,13 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return err
+	}
 	// 级联删除 spark 影子账号（先删影子，再删母账号）
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {
@@ -1240,11 +1304,21 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return nil, err
+	}
 	// TODO: Implement refresh logic
 	return account, nil
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
@@ -1267,10 +1341,24 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return err
+	}
 	return s.accountRepo.SetError(ctx, id, errorMsg)
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}
@@ -1282,11 +1370,18 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 }
 
 func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := ensureGenericManagedAccount(account); err != nil {
+		return err
+	}
 	if err := s.accountRepo.RevertProxyFallback(ctx, id); err != nil {
 		return err
 	}
 	// 加载回退后的账号以获取实际 ProxyID，再传播到影子账号
-	account, err := s.accountRepo.GetByID(ctx, id)
+	account, err = s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get account after proxy revert: %w", err)
 	}

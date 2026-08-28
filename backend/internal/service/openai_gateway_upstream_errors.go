@@ -794,6 +794,33 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
+	// Hugging Face credentials have a dedicated durable lifecycle. Classified
+	// failures (401/402/403/429/5xx) are handled before this formatter; all
+	// remaining client/model errors must be returned without touching the legacy
+	// OpenAI account error-code or temp-unschedulable machinery.
+	if account != nil && account.IsHuggingFace() {
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "http_error",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+		MarkResponseCommitted(c)
+		errType := "api_error"
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			errType = "invalid_request_error"
+		case http.StatusNotFound:
+			errType = "not_found_error"
+		}
+		writeError(c, resp.StatusCode, errType, upstreamMsg)
+		return nil, fmt.Errorf("hugging face upstream error: %d %s", resp.StatusCode, upstreamMsg)
+	}
+
 	// Check custom error codes — if the account does not handle this status,
 	// return a generic error without exposing upstream details.
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -179,6 +180,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, token, customUA, grokCacheIdentity)
 	if err != nil {
+		if account.IsHuggingFace() && ctx.Err() == nil && s.huggingFace != nil {
+			return nil, s.huggingFace.ObserveTransportFailure(ctx, account)
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -186,6 +190,19 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 7. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if account.IsHuggingFace() && s.huggingFace != nil {
+			if failoverErr := s.huggingFace.ObserveHTTPFailure(ctx, account, resp.StatusCode, resp.Header, respBody); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+					UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+					Kind: "failover", Message: upstreamMsg,
+				})
+				return nil, failoverErr
+			}
+			// Unclassified client/model errors (for example 400/404) are returned
+			// as-is and must not enter the legacy OpenAI account mutation path.
+			return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
+		}
 		if account.Platform == PlatformGrok {
 			kind := "http_error"
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
@@ -221,7 +238,6 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
-
 	if account.Platform == PlatformGrok {
 		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
 	}
@@ -237,6 +253,16 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if result != nil {
 		addOpenAIUsage(&result.Usage, bridgeUsage)
 		result.UpstreamEndpoint = grokChatRawEndpoint
+	}
+	if account.IsHuggingFace() && s.huggingFace != nil {
+		if forwardErr == nil {
+			s.huggingFace.ObserveSuccess(ctx, account)
+		} else if ctx.Err() == nil {
+			// A 2xx response header is not a success when the JSON/SSE body is
+			// malformed or truncated. Cool down the credential and count the
+			// pool failure only after response processing establishes the outcome.
+			_ = s.huggingFace.ObserveTransportFailure(ctx, account)
+		}
 	}
 	return result, forwardErr
 }
@@ -492,6 +518,10 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		}
 		return nil, fmt.Errorf("read upstream body: %w", err)
+	}
+	if account.IsHuggingFace() && !json.Valid(respBody) {
+		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Hugging Face returned an invalid JSON response")
+		return nil, errors.New("hugging face returned an invalid JSON response")
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {

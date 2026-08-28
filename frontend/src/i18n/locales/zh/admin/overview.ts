@@ -889,6 +889,7 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        huggingface: 'Hugging Face',
         composite: 'Composite',
       },
       saving: '保存中...',
