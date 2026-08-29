@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -653,7 +654,7 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		return nil, err
 	}
 	// 根据请求 profile（例如 OpenAI）选择协议模式
-	protocolMode := s.resolveProtocolMode(profile, proxyKey, parsedProxy)
+	protocolMode := s.resolveProtocolMode(profile, proxyKey, parsedProxy, accountID)
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, profile)
 	// 构建缓存键（根据隔离策略不同）
@@ -991,7 +992,7 @@ func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 	return settings
 }
 
-func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL) string {
+func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL, accountIDs ...int64) string {
 	if profile == service.HTTPUpstreamProfileGrok {
 		return upstreamProtocolModeGrok
 	}
@@ -1000,6 +1001,9 @@ func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamPr
 	}
 	settings := s.resolveOpenAIHTTP2Settings()
 	if !settings.enabled {
+		return upstreamProtocolModeOpenAIH1
+	}
+	if len(accountIDs) > 0 && s.forceOpenAIHTTP1ForAccount(accountIDs[0]) {
 		return upstreamProtocolModeOpenAIH1
 	}
 	if parsedProxy == nil {
@@ -1013,6 +1017,21 @@ func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamPr
 		return upstreamProtocolModeOpenAIH1Fallback
 	}
 	return upstreamProtocolModeOpenAIH2
+}
+
+func (s *httpUpstreamService) forceOpenAIHTTP1ForAccount(accountID int64) bool {
+	if s == nil || s.cfg == nil || accountID <= 0 {
+		return false
+	}
+	want := strconv.FormatInt(accountID, 10)
+	for _, rawGroup := range s.cfg.Gateway.OpenAIHTTP2.ForceHTTP1AccountIDs {
+		for _, rawID := range strings.Split(rawGroup, ",") {
+			if strings.TrimSpace(rawID) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *httpUpstreamService) isOpenAIHTTP2FallbackActive(proxyKey string) bool {

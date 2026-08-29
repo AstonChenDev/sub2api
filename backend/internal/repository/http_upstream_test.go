@@ -674,6 +674,31 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileHTTP2DisabledUsesHTTP1Transport() {
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, entry.protocolMode)
 }
 
+func (s *HTTPUpstreamSuite) TestOpenAIProfileAccountOverrideUsesHTTP1Transport() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:              true,
+			ForceHTTP1AccountIDs: []string{"42, 117356"},
+		},
+	}
+	svc := s.newService()
+
+	forcedEntry, err := svc.getClientEntry("", 117356, 10000, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	forcedTransport, ok := forcedEntry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.False(s.T(), forcedTransport.ForceAttemptHTTP2)
+	require.NotNil(s.T(), forcedTransport.TLSNextProto, "account HTTP/1 override must disable automatic H2 negotiation")
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, forcedEntry.protocolMode)
+
+	defaultEntry, err := svc.getClientEntry("", 999, 10000, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	defaultTransport, ok := defaultEntry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.True(s.T(), defaultTransport.ForceAttemptHTTP2, "unlisted accounts must keep HTTP/2")
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, defaultEntry.protocolMode)
+}
+
 func (s *HTTPUpstreamSuite) TestOpenAIHeaderTimeoutChangeRebuildsClient() {
 	s.cfg.Gateway = config.GatewayConfig{
 		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{Enabled: true},

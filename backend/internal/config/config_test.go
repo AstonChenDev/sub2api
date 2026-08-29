@@ -662,6 +662,15 @@ func TestLoadOpenAIHTTP2DisabledFromEnv(t *testing.T) {
 	require.False(t, cfg.Gateway.OpenAIHTTP2.Enabled)
 }
 
+func TestLoadOpenAIHTTP2ForceHTTP1AccountIDsFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_HTTP2_FORCE_HTTP1_ACCOUNT_IDS", "117356,42")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, []string{"117356", "42"}, cfg.Gateway.OpenAIHTTP2.ForceHTTP1AccountIDs)
+}
+
 func TestLoadDefaultOpenAIResponseHeaderTimeoutUnlimited(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

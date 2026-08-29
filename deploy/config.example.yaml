@@ -418,6 +418,9 @@ gateway:
   # OpenAI HTTP 上游协议策略（默认 HTTP/2；代理明确不兼容时可临时回退 HTTP/1.1）。
   openai_http2:
     enabled: true
+    # Comma-separated through GATEWAY_OPENAI_HTTP2_FORCE_HTTP1_ACCOUNT_IDS in env.
+    # 仅对明确列出的账号关闭 HTTP/2，其他账号仍保持 HTTP/2。
+    force_http1_account_ids: []
     allow_proxy_fallback_to_http1: true
     fallback_error_threshold: 2
     fallback_window_seconds: 60
