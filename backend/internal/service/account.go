@@ -1086,7 +1086,16 @@ func matchWildcardMappingResult(mapping map[string]string, requestedModel string
 		return matches[i].pattern < matches[j].pattern
 	})
 
-	return matches[0].target, true
+	matched := matches[0]
+	// A wildcard identity mapping is a prefix allowlist entry, not a request to
+	// send the literal wildcard upstream. For example, "doubao-*" ->
+	// "doubao-*" allows every Doubao model while preserving the concrete model
+	// name supplied by the client.
+	if strings.HasSuffix(matched.pattern, "*") && matched.target == matched.pattern {
+		return requestedModel, true
+	}
+
+	return matched.target, true
 }
 
 func (a *Account) IsCustomErrorCodesEnabled() bool {

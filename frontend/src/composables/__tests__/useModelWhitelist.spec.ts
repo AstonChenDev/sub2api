@@ -104,9 +104,10 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gemini-3.1-pro')
   })
 
-  it('whitelist 模式会忽略通配符条目', () => {
+  it('whitelist 模式会保留合法的前缀通配符条目', () => {
     const mapping = buildModelMappingObject('whitelist', ['claude-*', 'gemini-3.1-flash-image'], [])
     expect(mapping).toEqual({
+      'claude-*': 'claude-*',
       'gemini-3.1-flash-image': 'gemini-3.1-flash-image'
     })
   })
@@ -139,6 +140,7 @@ describe('useModelWhitelist', () => {
 
     expect(mapping).toEqual({
       'gpt-5.4': 'gpt-5.4-mini',
+      'claude-*': 'claude-*',
       'gpt-latest': 'gpt-5.4'
     })
   })

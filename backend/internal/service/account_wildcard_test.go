@@ -464,6 +464,17 @@ func TestAccountResolveMappedModel(t *testing.T) {
 			expectedMatch:  true,
 		},
 		{
+			name: "wildcard identity mapping preserves concrete requested model",
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"doubao-*": "doubao-*",
+				},
+			},
+			requestedModel: "doubao-seed-2-0-lite-260215",
+			expectedModel:  "doubao-seed-2-0-lite-260215",
+			expectedMatch:  true,
+		},
+		{
 			name:     "gemini customtools alias reports normalized match",
 			platform: PlatformGemini,
 			credentials: map[string]any{

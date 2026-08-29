@@ -509,12 +509,10 @@ export function buildModelMappingObject(
     for (const model of allowedModels) {
       const normalizedModel = model.trim()
       if (!normalizedModel) continue
-      // whitelist 模式的本意是"精确模型列表"，如果用户输入了通配符（如 claude-*），
-      // 写入 model_mapping 会导致 GetMappedModel() 把真实模型映射成 "claude-*"，从而转发失败。
-      // 因此这里跳过包含通配符的条目。
-      if (!normalizedModel.includes('*')) {
-        mapping[normalizedModel] = normalizedModel
-      }
+      // 白名单支持末尾通配符。后端会把 wildcard identity mapping 解释为
+      // “前缀允许且保留客户端的具体模型名”，不会把字面量 * 发给上游。
+      if (!isValidWildcardPattern(normalizedModel)) continue
+      mapping[normalizedModel] = normalizedModel
     }
   }
 
