@@ -629,6 +629,14 @@ export default {
       apiKeyRequired: 'API Key *',
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: '您的 Claude Console API Key',
+      upstreamHTTPVersion: {
+        label: '上游 HTTP 协议',
+        description: '控制该账号调用 OpenAI 兼容模型上游时使用的协议。切换后，新请求会进入独立连接池，不会中断正在进行的请求。',
+        auto: '自动（继承系统配置）',
+        http1: 'HTTP/1.1',
+        http2: 'HTTP/2',
+        emergencyOverrideHint: '运维环境变量强制 HTTP/1.1 时优先于账号设置，用作紧急兜底。'
+      },
       // OpenAI specific hints
       openai: {
         baseUrlHint: '留空使用官方 OpenAI API',

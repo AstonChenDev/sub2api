@@ -2892,6 +2892,30 @@
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
+      <div
+        v-if="upstreamHTTPVersionCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.upstreamHTTPVersion.label') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.description') }}
+            </p>
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.emergencyOverrideHint') }}
+            </p>
+          </div>
+          <div class="w-56 flex-shrink-0">
+            <Select
+              v-model="upstreamHTTPVersion"
+              data-testid="create-upstream-http-version"
+              :options="upstreamHTTPVersionOptions"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -3759,7 +3783,8 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  UpstreamHTTPVersion
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3802,6 +3827,10 @@ import {
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import {
+  isUpstreamHTTPVersionCapable,
+  UPSTREAM_HTTP_VERSION_AUTO
+} from './upstreamHttpVersion'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -3963,6 +3992,12 @@ const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
 const upstreamBillingAutoProbeEnabled = ref(true)
+const upstreamHTTPVersion = ref<UpstreamHTTPVersion>(UPSTREAM_HTTP_VERSION_AUTO)
+const upstreamHTTPVersionOptions = computed(() => [
+  { value: 'auto' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.auto') },
+  { value: 'http1' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http1') },
+  { value: 'http2' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http2') }
+])
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
 const accountMode = ref<CnAccountMode>('payg')
@@ -4485,6 +4520,10 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const upstreamHTTPVersionCapable = computed(() =>
+  isUpstreamHTTPVersionCapable(form.platform, form.type)
+)
+
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
   // Antigravity upstream 类型不需要 OAuth 流程
@@ -4586,6 +4625,7 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    upstreamHTTPVersion.value = UPSTREAM_HTTP_VERSION_AUTO
     // Reset base URL based on platform
     if (newPlatform === 'kimi' || newPlatform === 'zhipu' || newPlatform === 'deepseek') {
       apiKeyBaseUrl.value = defaultCNBaseUrl(newPlatform, accountMode.value, apiProtocol.value)
@@ -5063,6 +5103,7 @@ const resetForm = () => {
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
   upstreamBillingAutoProbeEnabled.value = true
+  upstreamHTTPVersion.value = UPSTREAM_HTTP_VERSION_AUTO
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -5161,11 +5202,16 @@ const handleClose = () => {
 }
 
 const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
-  if (form.platform !== 'openai') {
-    return base
+  const extra: Record<string, unknown> = { ...(base || {}) }
+  if (upstreamHTTPVersionCapable.value) {
+    extra.upstream_http_version = upstreamHTTPVersion.value
+  } else {
+    delete extra.upstream_http_version
   }
 
-  const extra: Record<string, unknown> = { ...(base || {}) }
+  if (form.platform !== 'openai') {
+    return Object.keys(extra).length > 0 ? extra : undefined
+  }
   if (accountCategory.value === 'oauth-based') {
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)

@@ -1514,6 +1514,30 @@
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
+      <div
+        v-if="upstreamHTTPVersionCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.upstreamHTTPVersion.label') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.description') }}
+            </p>
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.emergencyOverrideHint') }}
+            </p>
+          </div>
+          <div class="w-56 flex-shrink-0">
+            <Select
+              v-model="upstreamHTTPVersion"
+              data-testid="edit-upstream-http-version"
+              :options="upstreamHTTPVersionOptions"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -2849,6 +2873,7 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
+  UpstreamHTTPVersion,
   OllamaCloudUsageState
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -2906,6 +2931,11 @@ import {
   splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
+import {
+  isUpstreamHTTPVersionCapable,
+  normalizeUpstreamHTTPVersion,
+  UPSTREAM_HTTP_VERSION_AUTO
+} from './upstreamHttpVersion'
 
 interface Props {
   show: boolean
@@ -2965,6 +2995,15 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const upstreamHTTPVersion = ref<UpstreamHTTPVersion>(UPSTREAM_HTTP_VERSION_AUTO)
+const upstreamHTTPVersionCapable = computed(() =>
+  !!props.account && isUpstreamHTTPVersionCapable(props.account.platform, props.account.type)
+)
+const upstreamHTTPVersionOptions = computed(() => [
+  { value: 'auto' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.auto') },
+  { value: 'http1' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http1') },
+  { value: 'http2' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http2') }
+])
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -3683,6 +3722,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+	upstreamHTTPVersion.value = normalizeUpstreamHTTPVersion(extra?.upstream_http_version)
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
@@ -5214,6 +5254,15 @@ const handleSubmit = async () => {
       }
 
       updatePayload.extra = newExtra
+    }
+
+    if (upstreamHTTPVersionCapable.value) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        (props.account.extra as Record<string, unknown>) || {}
+      updatePayload.extra = {
+        ...currentExtra,
+        upstream_http_version: upstreamHTTPVersion.value
+      }
     }
 
     // For apikey/bedrock accounts, handle quota_limit in extra

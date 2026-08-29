@@ -69,7 +69,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
-	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfileForAccount(upstreamReq.Context(), HTTPUpstreamProfileOpenAI, account))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Authorization", "Bearer "+apiKey)
 	upstreamReq.Header.Set("Accept", "application/json")

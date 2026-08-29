@@ -98,6 +98,47 @@ describe('BulkEditAccountModal', () => {
     } as any)
   })
 
+  it('bulk updates the upstream HTTP protocol for compatible accounts', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    await wrapper.get('#bulk-edit-upstream-http-version-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-upstream-http-version-select"]').setValue('http1')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith(
+      [1, 2],
+      expect.objectContaining({ extra: { upstream_http_version: 'http1' } })
+    )
+  })
+
+  it('hides the shared HTTP protocol setting for dedicated transports', () => {
+    const wrapper = mountModal()
+
+    expect(wrapper.find('#bulk-edit-upstream-http-version-enabled').exists()).toBe(false)
+  })
+
+  it('resets the upstream HTTP protocol field when the modal closes', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+    await wrapper.get('#bulk-edit-upstream-http-version-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-upstream-http-version-select"]').setValue('http2')
+
+    await wrapper.setProps({ show: false })
+    await nextTick()
+    await wrapper.setProps({ show: true })
+
+    expect((wrapper.get('#bulk-edit-upstream-http-version-enabled').element as HTMLInputElement).checked)
+      .toBe(false)
+    expect((wrapper.get('[data-testid="bulk-edit-upstream-http-version-select"]').element as HTMLSelectElement).value)
+      .toBe('auto')
+  })
+
   it('批量修改倍率时提示自动同步账号需要先关闭同步', async () => {
     const wrapper = mountModal()
 

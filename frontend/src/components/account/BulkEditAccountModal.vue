@@ -692,6 +692,48 @@
         </div>
       </div>
 
+      <div
+        v-if="allUpstreamHTTPVersionCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-start justify-between gap-4">
+          <div class="flex-1">
+            <label
+              id="bulk-edit-upstream-http-version-label"
+              class="input-label mb-0"
+              for="bulk-edit-upstream-http-version-enabled"
+            >
+              {{ t('admin.accounts.upstreamHTTPVersion.label') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.description') }}
+            </p>
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.upstreamHTTPVersion.emergencyOverrideHint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableUpstreamHTTPVersion"
+            id="bulk-edit-upstream-http-version-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-upstream-http-version-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-upstream-http-version-body"
+          :class="!enableUpstreamHTTPVersion && 'pointer-events-none opacity-50'"
+        >
+          <Select
+            v-model="upstreamHTTPVersion"
+            :disabled="!enableUpstreamHTTPVersion"
+            data-testid="bulk-edit-upstream-http-version-select"
+            :options="upstreamHTTPVersionOptions"
+            aria-labelledby="bulk-edit-upstream-http-version-label"
+          />
+        </div>
+      </div>
+
       <!-- Concurrency & Priority -->
       <div class="grid grid-cols-2 gap-4 border-t border-gray-200 pt-4 dark:border-dark-600 lg:grid-cols-4">
         <div>
@@ -1483,7 +1525,8 @@ import type {
   AccountType,
   OpenAICompactMode,
   OpenAIEndpointCapability,
-  OpenAIResponsesMode
+  OpenAIResponsesMode,
+  UpstreamHTTPVersion
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -1515,6 +1558,10 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey
 } from '@/utils/openaiWsMode'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
+import {
+  isUpstreamHTTPVersionCapable,
+  UPSTREAM_HTTP_VERSION_AUTO
+} from './upstreamHttpVersion'
 interface Props {
   show: boolean
   accountIds: number[]
@@ -1587,6 +1634,16 @@ const allOpenAIAPIKey = computed(() => {
     targetSelectedPlatforms.value[0] === 'openai' &&
     targetSelectedTypes.value.length > 0 &&
     targetSelectedTypes.value.every(t => t === 'apikey')
+  )
+})
+
+const allUpstreamHTTPVersionCapable = computed(() => {
+  return (
+    targetSelectedPlatforms.value.length > 0 &&
+    targetSelectedTypes.value.length > 0 &&
+    targetSelectedPlatforms.value.every(platform =>
+      targetSelectedTypes.value.every(type => isUpstreamHTTPVersionCapable(platform, type))
+    )
   )
 })
 
@@ -1664,6 +1721,7 @@ const enableOpenAIResponsesMode = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
 const enableUpstreamBillingAutoProbe = ref(false)
+const enableUpstreamHTTPVersion = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
@@ -1703,6 +1761,12 @@ const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
+const upstreamHTTPVersion = ref<UpstreamHTTPVersion>(UPSTREAM_HTTP_VERSION_AUTO)
+const upstreamHTTPVersionOptions = computed(() => [
+  { value: 'auto' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.auto') },
+  { value: 'http1' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http1') },
+  { value: 'http2' as UpstreamHTTPVersion, label: t('admin.accounts.upstreamHTTPVersion.http2') }
+])
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
@@ -1938,6 +2002,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableProxy.value) {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
+  }
+
+  if (enableUpstreamHTTPVersion.value && allUpstreamHTTPVersionCapable.value) {
+    const extra = ensureExtra()
+    extra.upstream_http_version = upstreamHTTPVersion.value
   }
 
   if (enableConcurrency.value) {
@@ -2199,6 +2268,7 @@ const handleSubmit = async () => {
     enableInterceptWarmup.value ||
     enableHeaderOverride.value ||
     enableProxy.value ||
+    (enableUpstreamHTTPVersion.value && allUpstreamHTTPVersionCapable.value) ||
     enableConcurrency.value ||
     enableLoadFactor.value ||
     enablePriority.value ||
@@ -2359,6 +2429,7 @@ watch(
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
       enableUpstreamBillingAutoProbe.value = false
+      enableUpstreamHTTPVersion.value = false
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
       enableCodexFingerprintMode.value = false
@@ -2392,6 +2463,7 @@ watch(
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       upstreamBillingAutoProbeMode.value = 'enabled'
+      upstreamHTTPVersion.value = UPSTREAM_HTTP_VERSION_AUTO
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false
       openAICompactMode.value = 'auto'

@@ -678,6 +678,18 @@ curl --http1.1 -I http://localhost:8080/health
 websocat -H="Sec-WebSocket-Protocol: sub2api-admin, jwt.<ADMIN_TOKEN>" ws://localhost:8080/api/v1/admin/ops/ws/qps
 ```
 
+#### OpenAI 兼容上游的账号级 HTTP 协议
+
+OpenAI、Kimi、智谱和 DeepSeek 账号可在新增、编辑和批量编辑弹窗中选择
+**自动**、**HTTP/1.1** 或 **HTTP/2**。自动模式继承
+`gateway.openai_http2.enabled`；账号显式设置优先于全局默认值。修改协议后，
+新请求会使用按协议隔离的新连接池，正在执行的请求继续使用原连接池，不会被中断。
+
+紧急运维时可设置
+`GATEWAY_OPENAI_HTTP2_FORCE_HTTP1_ACCOUNT_IDS=123,456`。该名单优先级最高，
+即使账号选择了 HTTP/2 也会强制使用 HTTP/1.1。Grok 与 Hugging Face 使用专用传输，
+不受这个账号选项影响。
+
 #### 开发模式
 
 ```bash

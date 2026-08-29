@@ -203,12 +203,14 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 	profile := service.HTTPUpstreamProfileDefault
+	upstreamHTTPVersion := service.UpstreamHTTPVersionAuto
 	if req != nil {
 		profile = service.HTTPUpstreamProfileFromContext(req.Context())
+		upstreamHTTPVersion = service.UpstreamHTTPVersionFromContext(req.Context())
 	}
 
 	// 获取或创建对应的客户端，并标记请求占用
-	entry, err := s.acquireClientWithProfile(proxyURL, accountID, accountConcurrency, profile)
+	entry, err := s.acquireClientWithProfileAndVersion(proxyURL, accountID, accountConcurrency, profile, upstreamHTTPVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -620,7 +622,11 @@ func (s *httpUpstreamService) acquireClient(proxyURL string, accountID int64, ac
 
 // acquireClientWithProfile 获取或创建客户端，并按请求 profile 选择协议策略。
 func (s *httpUpstreamService) acquireClientWithProfile(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
-	return s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true)
+	return s.acquireClientWithProfileAndVersion(proxyURL, accountID, accountConcurrency, profile, service.UpstreamHTTPVersionAuto)
+}
+
+func (s *httpUpstreamService) acquireClientWithProfileAndVersion(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, version service.UpstreamHTTPVersion) (*upstreamClientEntry, error) {
+	return s.getClientEntryWithVersion(proxyURL, accountID, accountConcurrency, profile, true, true, version)
 }
 
 // getOrCreateClient 获取或创建客户端
@@ -646,6 +652,10 @@ func (s *httpUpstreamService) getOrCreateClient(proxyURL string, accountID int64
 // markInFlight=true 时会标记进行中请求，用于请求路径防止被淘汰
 // enforceLimit=true 时会限制客户端数量，超限且无法淘汰时返回错误
 func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+	return s.getClientEntryWithVersion(proxyURL, accountID, accountConcurrency, profile, markInFlight, enforceLimit, service.UpstreamHTTPVersionAuto)
+}
+
+func (s *httpUpstreamService) getClientEntryWithVersion(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool, upstreamHTTPVersion service.UpstreamHTTPVersion) (*upstreamClientEntry, error) {
 	// 获取隔离模式
 	isolation := s.getIsolationMode()
 	// 标准化代理 URL 并解析
@@ -654,7 +664,7 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		return nil, err
 	}
 	// 根据请求 profile（例如 OpenAI）选择协议模式
-	protocolMode := s.resolveProtocolMode(profile, proxyKey, parsedProxy, accountID)
+	protocolMode := s.resolveProtocolModeWithPreference(profile, proxyKey, parsedProxy, accountID, upstreamHTTPVersion)
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, profile)
 	// 构建缓存键（根据隔离策略不同）
@@ -993,17 +1003,34 @@ func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 }
 
 func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL, accountIDs ...int64) string {
+	accountID := int64(0)
+	if len(accountIDs) > 0 {
+		accountID = accountIDs[0]
+	}
+	return s.resolveProtocolModeWithPreference(profile, proxyKey, parsedProxy, accountID, service.UpstreamHTTPVersionAuto)
+}
+
+func (s *httpUpstreamService) resolveProtocolModeWithPreference(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL, accountID int64, preference service.UpstreamHTTPVersion) string {
 	if profile == service.HTTPUpstreamProfileGrok {
 		return upstreamProtocolModeGrok
 	}
 	if profile != service.HTTPUpstreamProfileOpenAI {
 		return upstreamProtocolModeDefault
 	}
-	settings := s.resolveOpenAIHTTP2Settings()
-	if !settings.enabled {
+	// The environment list is an operational break-glass override and always
+	// wins over account data. It lets operators recover an account even if the
+	// admin UI or database is unavailable.
+	if s.forceOpenAIHTTP1ForAccount(accountID) {
 		return upstreamProtocolModeOpenAIH1
 	}
-	if len(accountIDs) > 0 && s.forceOpenAIHTTP1ForAccount(accountIDs[0]) {
+	switch preference {
+	case service.UpstreamHTTPVersionHTTP1:
+		return upstreamProtocolModeOpenAIH1
+	case service.UpstreamHTTPVersionHTTP2:
+		return upstreamProtocolModeOpenAIH2
+	}
+	settings := s.resolveOpenAIHTTP2Settings()
+	if !settings.enabled {
 		return upstreamProtocolModeOpenAIH1
 	}
 	if parsedProxy == nil {

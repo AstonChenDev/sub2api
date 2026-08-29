@@ -496,7 +496,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if input != nil && input.Platform == PlatformHuggingFace {
 		return nil, huggingFaceDedicatedManagementError()
 	}
-	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
+	accountExtra, err := normalizeUpstreamHTTPVersionExtra(input.Platform, input.Extra)
+	if err != nil {
+		return nil, err
+	}
+	accountExtra, err = normalizeOpenAILongContextBillingExtra(input.Platform, accountExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -592,7 +596,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
-		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
+		normalizedExtra, err = normalizeUpstreamHTTPVersionExtra(account.Platform, input.Extra)
+		if err != nil {
+			return nil, err
+		}
+		normalizedInput := *input
+		normalizedInput.Extra = normalizedExtra
+		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, &normalizedInput)
 		if err != nil {
 			return nil, err
 		}
@@ -916,6 +926,10 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if err := ensureGenericManagedAccount(account); err != nil {
 		return err
 	}
+	updates, err = normalizeUpstreamHTTPVersionExtra(account.Platform, updates)
+	if err != nil {
+		return err
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -938,6 +952,13 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	upstreamHTTPVersion, hasUpstreamHTTPVersion, err := parseUpstreamHTTPVersionExtra(input.Extra)
+	if err != nil {
+		return nil, err
+	}
+	if hasUpstreamHTTPVersion {
+		input.Extra[UpstreamHTTPVersionExtraKey] = string(upstreamHTTPVersion)
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
@@ -991,7 +1012,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || hasUpstreamHTTPVersion {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1007,6 +1028,18 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+		}
+	}
+	if hasUpstreamHTTPVersion {
+		for _, accountID := range input.AccountIDs {
+			account, ok := targetsByID[accountID]
+			if !ok {
+				return nil, ErrAccountNotFound
+			}
+			if !SupportsUpstreamHTTPVersion(account.Platform) {
+				return nil, infraerrors.New(http.StatusBadRequest, "UPSTREAM_HTTP_VERSION_UNSUPPORTED",
+					"upstream_http_version is only supported for OpenAI-compatible account platforms")
+			}
 		}
 	}
 	if openAISettings.any() {

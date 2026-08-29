@@ -328,6 +328,29 @@ describe('EditAccountModal', () => {
     authIsSimpleMode.value = true
   })
 
+  it('loads and updates the account upstream HTTP protocol', async () => {
+    const account = buildAccount()
+    account.extra = { upstream_http_version: 'http1' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const select = wrapper.get('[data-testid="edit-upstream-http-version"]')
+    expect((select.element as HTMLSelectElement).value).toBe('http1')
+
+    await select.setValue('http2')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.upstream_http_version).toBe('http2')
+  })
+
+  it('does not expose the shared HTTP protocol setting for Grok accounts', () => {
+    const wrapper = mountModal(buildGrokOAuthAccount())
+
+    expect(wrapper.find('[data-testid="edit-upstream-http-version"]').exists()).toBe(false)
+  })
+
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()

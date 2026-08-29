@@ -544,6 +544,14 @@ export default {
       apiKeyRequired: 'API Key *',
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: 'Your Claude Console API Key',
+      upstreamHTTPVersion: {
+        label: 'Upstream HTTP protocol',
+        description: 'Controls the protocol this account uses for OpenAI-compatible upstream model requests. A change gives new requests a separate connection pool without interrupting in-flight requests.',
+        auto: 'Auto (inherit system setting)',
+        http1: 'HTTP/1.1',
+        http2: 'HTTP/2',
+        emergencyOverrideHint: 'The operations environment override that forces HTTP/1.1 takes precedence as an emergency fallback.'
+      },
       // OpenAI specific hints
       openai: {
         baseUrlHint: 'Leave default for official OpenAI API',

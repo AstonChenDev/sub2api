@@ -279,7 +279,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	reqCtx := WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI))
+	reqCtx := WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfileForAccount(ctx, HTTPUpstreamProfileOpenAI, account))
 	upstreamReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, chatGPTLiveCallsURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

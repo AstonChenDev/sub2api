@@ -699,6 +699,57 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileAccountOverrideUsesHTTP1Transport()
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, defaultEntry.protocolMode)
 }
 
+func (s *HTTPUpstreamSuite) TestOpenAIProfileAccountDataSelectsHTTP1AndHTTP2() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{Enabled: false},
+	}
+	svc := s.newService()
+
+	http1Entry, err := svc.getClientEntryWithVersion("", 7001, 10, service.HTTPUpstreamProfileOpenAI, false, false, service.UpstreamHTTPVersionHTTP1)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, http1Entry.protocolMode)
+
+	// An explicit account choice overrides the global default.
+	http2Entry, err := svc.getClientEntryWithVersion("", 7002, 10, service.HTTPUpstreamProfileOpenAI, false, false, service.UpstreamHTTPVersionHTTP2)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, http2Entry.protocolMode)
+	http2Transport, ok := http2Entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok)
+	require.True(s.T(), http2Transport.ForceAttemptHTTP2)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileEnvironmentHTTP1OverrideWinsOverAccountHTTP2() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:              true,
+			ForceHTTP1AccountIDs: []string{"117356"},
+		},
+	}
+	svc := s.newService()
+
+	entry, err := svc.getClientEntryWithVersion("", 117356, 10, service.HTTPUpstreamProfileOpenAI, false, false, service.UpstreamHTTPVersionHTTP2)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, entry.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileProtocolChangeUsesNewPoolWithoutInterruptingOldPool() {
+	s.cfg.Gateway = config.GatewayConfig{
+		ConnectionPoolIsolation: config.ConnectionPoolIsolationAccount,
+		OpenAIHTTP2:             config.GatewayOpenAIHTTP2Config{Enabled: true},
+	}
+	svc := s.newService()
+
+	http2Entry, err := svc.getClientEntryWithVersion("", 8001, 10, service.HTTPUpstreamProfileOpenAI, false, false, service.UpstreamHTTPVersionHTTP2)
+	require.NoError(s.T(), err)
+	http1Entry, err := svc.getClientEntryWithVersion("", 8001, 10, service.HTTPUpstreamProfileOpenAI, false, false, service.UpstreamHTTPVersionHTTP1)
+	require.NoError(s.T(), err)
+
+	require.NotSame(s.T(), http2Entry, http1Entry)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, http2Entry.protocolMode)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, http1Entry.protocolMode)
+	require.Len(s.T(), svc.clients, 2, "old and new protocol pools should coexist until idle eviction")
+}
+
 func (s *HTTPUpstreamSuite) TestOpenAIHeaderTimeoutChangeRebuildsClient() {
 	s.cfg.Gateway = config.GatewayConfig{
 		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{Enabled: true},

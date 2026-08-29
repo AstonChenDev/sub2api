@@ -676,6 +676,21 @@ takes effect without enabling `mode_router_v2_enabled`. Keep the setting in the
 deployment's persisted `.env` or `config.yaml`, rather than inside a running
 container, so it is read again after an image update or container recreation.
 
+#### Per-account upstream HTTP version
+
+OpenAI-compatible accounts (OpenAI, Kimi, Zhipu, and DeepSeek) can select
+**Auto**, **HTTP/1.1**, or **HTTP/2** in the create, edit, and bulk-edit account
+dialogs. Auto inherits `gateway.openai_http2.enabled`; an explicit account
+choice overrides that global default. Changing the value gives new requests a
+protocol-specific connection pool, while existing in-flight requests continue
+on their original pool.
+
+For emergency operations,
+`GATEWAY_OPENAI_HTTP2_FORCE_HTTP1_ACCOUNT_IDS=123,456` has the highest
+precedence and forces the listed accounts to HTTP/1.1 even if their account
+setting is HTTP/2. Grok and Hugging Face use dedicated transports and are not
+affected by this account option.
+
 #### ⚠️ Important: Creating the Admin Account
 
 The initial admin account is **only created via the setup wizard** (served at `http://<host>:8080` on first run). The `default.admin_email` / `default.admin_password` fields in `config.yaml` are **not used** to create it — they exist in the template for historical reasons.
