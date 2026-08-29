@@ -708,9 +708,6 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.upstreamHTTPVersion.description') }}
             </p>
-            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {{ t('admin.accounts.upstreamHTTPVersion.emergencyOverrideHint') }}
-            </p>
           </div>
           <input
             v-model="enableUpstreamHTTPVersion"
@@ -731,6 +728,7 @@
             :options="upstreamHTTPVersionOptions"
             aria-labelledby="bulk-edit-upstream-http-version-label"
           />
+          <UpstreamHTTPVersionHelp :model-value="upstreamHTTPVersion" class="mt-3" />
         </div>
       </div>
 
@@ -1534,6 +1532,7 @@ import Select from '@/components/common/Select.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import UpstreamHTTPVersionHelp from '@/components/account/UpstreamHTTPVersionHelp.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
   buildModelMappingObject as buildModelMappingPayload,

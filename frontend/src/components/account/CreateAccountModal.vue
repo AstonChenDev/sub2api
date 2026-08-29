@@ -2902,9 +2902,6 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.upstreamHTTPVersion.description') }}
             </p>
-            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {{ t('admin.accounts.upstreamHTTPVersion.emergencyOverrideHint') }}
-            </p>
           </div>
           <div class="w-56 flex-shrink-0">
             <Select
@@ -2914,6 +2911,7 @@
             />
           </div>
         </div>
+        <UpstreamHTTPVersionHelp :model-value="upstreamHTTPVersion" class="mt-3" />
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -3800,6 +3798,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import UpstreamHTTPVersionHelp from '@/components/account/UpstreamHTTPVersionHelp.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
   applyAntigravityProjectID,
