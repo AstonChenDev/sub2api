@@ -329,6 +329,34 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Nil(t, got.Extra["unused_large_field"])
 }
 
+func TestBuildSchedulerMetadataAccount_KeepsOpenAIPassthroughFlags(t *testing.T) {
+	for _, key := range []string{"openai_passthrough", "openai_oauth_passthrough"} {
+		t.Run(key, func(t *testing.T) {
+			account := service.Account{
+				ID:       43,
+				Platform: service.PlatformOpenAI,
+				Type:     service.AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"gpt-5.4": "gpt-5.4",
+					},
+				},
+				Extra: map[string]any{
+					key:                  true,
+					"unused_large_field": "drop-me",
+				},
+			}
+
+			got := buildSchedulerMetadataAccount(account)
+
+			require.Equal(t, true, got.Extra[key])
+			require.Nil(t, got.Extra["unused_large_field"])
+			require.True(t, got.IsOpenAIPassthroughEnabled())
+			require.True(t, got.IsModelSupported("doubao-seed-2-0-lite-260215"))
+		})
+	}
+}
+
 func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 	t.Run("explicit override", func(t *testing.T) {
 		account := service.Account{
