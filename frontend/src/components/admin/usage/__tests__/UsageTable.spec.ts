@@ -30,6 +30,7 @@ const messages: Record<string, string> = {
   'usage.perMillionTokens': '/ 1M tokens',
   'usage.serviceTier': 'Service tier',
   'usage.serviceTierPriority': 'Fast',
+  'usage.serviceTierUltrafast': 'Ultrafast',
   'usage.serviceTierFlex': 'Flex',
   'usage.serviceTierStandard': 'Standard',
   'usage.rate': 'Rate',
@@ -54,10 +55,14 @@ const messages: Record<string, string> = {
   'usage.imageSizeUnknown': 'unknown',
   'usage.imageUnitPrice': 'Per-image price',
   'usage.imageTotalPrice': 'Image total price',
+  'usage.stream': 'Stream',
+  'usage.sync': 'Sync',
+  'usage.nativeCompactionV2': 'Compaction',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
 	'admin.usage.requestIdCopied': 'Request ID copied',
+	'admin.usage.upstreamRequestIdCopied': 'Upstream ID copied',
 	'keys.copied': 'Copied',
 	'keys.copyToClipboard': 'Copy to clipboard',
 	'common.copyFailed': 'Copy failed',
@@ -89,6 +94,7 @@ const DataTableStub = {
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
+        <slot name="cell-upstream_request_id" :row="row" />
       </div>
     </div>
   `,
@@ -167,6 +173,56 @@ describe('admin UsageTable tooltip', () => {
 
     expect(wrapper.findAll('[data-testid="long-context-billing-marker"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="long-context-billing-marker"]').text()).toBe('x2')
+  })
+
+  it('keeps the request type badge and adds a separate badge only for native compaction rows', () => {
+    const DataTableStreamStub = {
+      props: ['data'],
+      template: `
+        <div>
+          <div v-for="row in data" :key="row.request_id">
+            <slot name="cell-stream" :row="row" />
+          </div>
+        </div>
+      `,
+    }
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          {
+            ...baseImageRow,
+            request_id: 'req-compaction-stream',
+            request_type: 'stream',
+            stream: true,
+            native_compaction_v2: true,
+          },
+          {
+            ...baseImageRow,
+            request_id: 'req-historical-sync',
+            request_type: 'sync',
+            stream: false,
+            native_compaction_v2: false,
+          },
+        ],
+        loading: false,
+        columns: [],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStreamStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    const requestBadges = wrapper.findAll('[data-testid="request-type-badge"]')
+    expect(requestBadges).toHaveLength(2)
+    expect(requestBadges[0].text()).toBe('Stream')
+    expect(requestBadges[1].text()).toBe('Sync')
+    expect(wrapper.findAll('[data-testid="native-compaction-badge"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="native-compaction-badge"]').text()).toBe('Compaction')
   })
 
   it('shows service tier and billing breakdown in cost tooltip', async () => {
@@ -533,6 +589,35 @@ describe('admin UsageTable request ID column', () => {
 
     expect(writeText).toHaveBeenCalledWith('req-admin-visible-id')
     expect(appStoreMocks.showSuccess).toHaveBeenCalledWith('Request ID copied')
+  })
+
+  it('renders and copies the upstream ID', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '20260903082826779695' }],
+        loading: false,
+        columns: [{ key: 'upstream_request_id', label: 'Upstream ID' }],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('20260903082826779695')
+    const copyButtons = wrapper.findAll('button[title="Copy to clipboard"]')
+    expect(copyButtons).toHaveLength(1)
+    await copyButtons[0].trigger('click')
+
+    expect(writeText).toHaveBeenCalledWith('20260903082826779695')
+    expect(appStoreMocks.showSuccess).toHaveBeenCalledWith('Upstream ID copied')
   })
 })
 
