@@ -654,8 +654,10 @@ func compareVersions(current, latest string) int {
 }
 
 func parseVersion(v string) [3]int {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "custom-")
 	v = strings.TrimPrefix(v, "v")
-	if idx := strings.IndexByte(v, '-'); idx != -1 {
+	if idx := strings.IndexAny(v, "-+"); idx != -1 {
 		v = v[:idx]
 	}
 	parts := strings.Split(v, ".")
