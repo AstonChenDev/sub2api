@@ -824,16 +824,12 @@ func (r *groupRepository) ExistsByIDs(ctx context.Context, ids []int64) (map[int
 }
 
 func (r *groupRepository) GetAccountCount(ctx context.Context, groupID int64) (total int64, active int64, err error) {
-	var rateLimited int64
-	err = scanSingleRow(ctx, r.sql,
-		fmt.Sprintf(`SELECT
-			COUNT(*) FILTER (WHERE a.deleted_at IS NULL),
-			COUNT(*) FILTER (WHERE %s),
-			COUNT(*) FILTER (WHERE %s)
-		FROM account_groups ag JOIN accounts a ON a.id = ag.account_id
-		WHERE ag.group_id = $1`, groupAccountAvailableSQL, groupAccountTemporarilyLimitedSQL),
-		[]any{groupID}, &total, &active, &rateLimited)
-	return
+	counts, err := r.loadAccountCounts(ctx, []int64{groupID})
+	if err != nil {
+		return 0, 0, err
+	}
+	c := counts[groupID]
+	return c.Total, c.Active, nil
 }
 
 func (r *groupRepository) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
@@ -1006,14 +1002,23 @@ func (r *groupRepository) loadAccountCounts(ctx context.Context, groupIDs []int6
 
 	rows, err := r.sql.QueryContext(
 		ctx,
-		fmt.Sprintf(`SELECT ag.group_id,
+		fmt.Sprintf(`SELECT group_id, SUM(total), SUM(active), SUM(rate_limited) FROM (
+		SELECT ag.group_id,
 			COUNT(*) FILTER (WHERE a.deleted_at IS NULL) AS total,
 			COUNT(*) FILTER (WHERE %s) AS active,
 			COUNT(*) FILTER (WHERE %s) AS rate_limited
 		FROM account_groups ag
 		JOIN accounts a ON a.id = ag.account_id
-		WHERE ag.group_id = ANY($1)
-		GROUP BY ag.group_id`, groupAccountAvailableSQL, groupAccountTemporarilyLimitedSQL),
+		WHERE ag.group_id = ANY($1) AND a.platform <> 'huggingface'
+		GROUP BY ag.group_id
+		UNION ALL
+		SELECT p.group_id, COUNT(*),
+			COUNT(*) FILTER (WHERE p.status = 'active' AND a.type = 'apikey' AND %s),
+			COUNT(*) FILTER (WHERE p.status = 'active' AND a.type = 'apikey' AND %s)
+		`+hfGroupAccountsFromSQL+`
+		GROUP BY p.group_id
+		) counts GROUP BY group_id`, groupAccountAvailableSQL, groupAccountTemporarilyLimitedSQL,
+			groupAccountAvailableSQL, groupAccountTemporarilyLimitedSQL),
 		pq.Array(groupIDs),
 	)
 	if err != nil {
