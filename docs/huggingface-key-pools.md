@@ -16,6 +16,27 @@ billing foreign keys. They are never inserted into `account_groups`, and a
 database trigger rejects an accidental binding. The legacy scheduler therefore
 does not load these credentials into its full account snapshot.
 
+## Group statistics
+
+The group management page aggregates HF credentials through their pools:
+
+- **Total accounts** includes non-deleted credentials in non-deleted pools,
+  including disabled pools and disabled credentials.
+- **Available accounts** includes active, schedulable API-key credentials in
+  active pools. Expiry with automatic pausing, rate limits, overload and temporary
+  scheduling cooldowns exclude a credential until it becomes available again.
+- **Temporarily limited accounts** counts otherwise eligible credentials with a
+  rate-limit, overload or temporary scheduling window, once per credential.
+- **Capacity** is the sum of available credentials' configured concurrency, with
+  current usage read from the same Redis account slots used by HF requests.
+  HF does not contribute session or RPM limits to this summary.
+
+These are group-wide durable availability statistics, independent of a requested
+model, pool priority or transient pool circuit breakers. Account counts are shared
+by the list, detail and account-count sorting paths. Capacity reporting reads only
+IDs and limits and uses bounded Redis batches; it does not decrypt credentials or
+insert them into ordinary account management or scheduling snapshots.
+
 ## Enable
 
 The feature is disabled by default. Generate and persist a dedicated key:

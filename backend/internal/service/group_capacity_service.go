@@ -36,6 +36,10 @@ type groupCapacityAccountLister interface {
 	ListSchedulableCapacityByGroupIDs(ctx context.Context, groupIDs []int64) ([]GroupAccountCapacityRow, error)
 }
 
+type groupCapacityHuggingFaceLister interface {
+	ListHuggingFaceCapacityByGroupIDs(ctx context.Context, groupIDs []int64) ([]GroupAccountCapacityRow, error)
+}
+
 // GroupCapacityService aggregates per-group capacity from runtime data.
 type GroupCapacityService struct {
 	accountRepo        AccountRepository
@@ -69,11 +73,71 @@ func (s *GroupCapacityService) GetAllGroupCapacity(ctx context.Context) ([]Group
 		return nil, err
 	}
 
+	var results []GroupCapacitySummary
 	if lister, ok := s.accountRepo.(groupCapacityAccountLister); ok {
-		return s.getGroupCapacitiesBatch(ctx, groupIDs, lister)
+		results, err = s.getGroupCapacitiesBatch(ctx, groupIDs, lister)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		results = s.getGroupCapacitiesSequential(ctx, groupIDs)
 	}
 
-	return s.getGroupCapacitiesSequential(ctx, groupIDs), nil
+	if err := s.addHuggingFaceCapacity(ctx, groupIDs, results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// HF uses the shared account concurrency slots, but not ordinary account-group
+// membership, session limits or RPM limits. Read only its reporting projection.
+func (s *GroupCapacityService) addHuggingFaceCapacity(ctx context.Context, groupIDs []int64, results []GroupCapacitySummary) error {
+	lister, ok := s.groupRepo.(groupCapacityHuggingFaceLister)
+	if !ok || len(groupIDs) == 0 {
+		return nil
+	}
+	rows, err := lister.ListHuggingFaceCapacityByGroupIDs(ctx, groupIDs)
+	if err != nil {
+		return err
+	}
+	groupIndex := make(map[int64]int, len(results))
+	for i := range results {
+		groupIndex[results[i].GroupID] = i
+	}
+	accountGroups := make(map[int64]int, len(rows))
+	accountIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		idx, ok := groupIndex[row.GroupID]
+		if !ok || row.AccountID <= 0 {
+			continue
+		}
+		if _, seen := accountGroups[row.AccountID]; seen {
+			continue
+		}
+		accountGroups[row.AccountID] = idx
+		accountIDs = append(accountIDs, row.AccountID)
+		results[idx].ConcurrencyMax += row.Concurrency
+	}
+	if s.concurrencyService == nil {
+		return nil
+	}
+	// A pool may contain 100k credentials. Bound each Redis pipeline rather than
+	// issuing hundreds of thousands of commands in a single request.
+	const batchSize = 512
+	for start := 0; start < len(accountIDs); start += batchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ids := accountIDs[start:min(start+batchSize, len(accountIDs))]
+		counts, err := s.concurrencyService.GetAccountConcurrencyBatch(ctx, ids)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			results[accountGroups[id]].ConcurrencyUsed += counts[id]
+		}
+	}
+	return nil
 }
 
 func (s *GroupCapacityService) listActiveGroupIDs(ctx context.Context) ([]int64, error) {
