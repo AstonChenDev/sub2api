@@ -383,6 +383,7 @@ func (r *accountRepository) GetByCRSAccountID(ctx context.Context, crsAccountID 
 	// 更新而覆盖 type/credentials/proxy。即便影子 Extra 被误写入 crs_account_id 也不会命中
 	// (外审第7轮 P1)。
 	m, err := r.client.Account.Query().
+		Where(ordinaryAccountPredicate()).
 		Where(dbaccount.ParentAccountIDIsNil()).
 		Where(func(s *entsql.Selector) {
 			s.Where(sqljson.ValueEQ(dbaccount.FieldExtra, crsAccountID, sqljson.Path("crs_account_id")))
@@ -412,6 +413,7 @@ func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]i
 		SELECT id, extra->>'crs_account_id'
 		FROM accounts
 		WHERE deleted_at IS NULL
+			AND `+ordinaryAccountSQLPredicate+`
 			AND parent_account_id IS NULL
 			AND extra->>'crs_account_id' IS NOT NULL
 			AND extra->>'crs_account_id' != ''
@@ -919,7 +921,7 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 	// resource. Keeping them out of the generic account query prevents a large
 	// pool (100k+ keys) from changing the existing account-management semantics
 	// and from being exposed through generic bulk/export operations.
-	q := r.client.Account.Query().Where(dbaccount.PlatformNEQ(service.PlatformHuggingFace))
+	q := r.client.Account.Query().Where(ordinaryAccountPredicate())
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -1069,7 +1071,7 @@ func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platfor
 		return []service.Account{}, nil
 	}
 
-	q := r.client.Account.Query().Where(dbaccount.PlatformNEQ(service.PlatformHuggingFace))
+	q := r.client.Account.Query().Where(ordinaryAccountPredicate())
 	if platformFilter = strings.TrimSpace(platformFilter); platformFilter != "" {
 		q = q.Where(dbaccount.PlatformEQ(platformFilter))
 	}
@@ -1203,7 +1205,10 @@ func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]s
 
 func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, error) {
 	accounts, err := r.client.Account.Query().
-		Where(dbaccount.StatusEQ(service.StatusActive)).
+		Where(
+			ordinaryAccountPredicate(),
+			dbaccount.StatusEQ(service.StatusActive),
+		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -1222,6 +1227,10 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	if options.Limit <= 0 || options.Limit > 1000 {
 		return nil, errors.New("oauth refresh candidate page limit must be between 1 and 1000")
 	}
+	platforms := ordinaryAccountPlatforms(options.Platforms)
+	if len(platforms) == 0 {
+		return &service.OAuthRefreshCandidatePage{Accounts: []service.Account{}}, nil
+	}
 
 	// (cond) IS NOT TRUE 把 NULL 和 FALSE 都视为"可被刷新"。直接写
 	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
@@ -1231,6 +1240,7 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 		SELECT id
 		FROM accounts
 		WHERE deleted_at IS NULL
+			AND ` + ordinaryAccountSQLPredicate + `
 			AND schedulable = TRUE
 			AND platform = ANY($1)
 			AND id > $2`
@@ -1261,7 +1271,7 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 		ORDER BY id ASC
 		LIMIT $3`
 
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(options.Platforms), options.AfterID, options.Limit)
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(platforms), options.AfterID, options.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1309,8 +1319,12 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 }
 
 func (r *accountRepository) ListByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	if !isOrdinaryAccountPlatform(platform) {
+		return []service.Account{}, nil
+	}
 	accounts, err := r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 		).
@@ -1943,6 +1957,7 @@ func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]
 func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.AccountQuery {
 	return r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
@@ -1988,7 +2003,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		return rows, nil
 	}
 
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		SELECT
 			ag.group_id,
 			a.id AS account_id,
@@ -2001,14 +2016,15 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		JOIN accounts a ON a.id = ag.account_id
 		WHERE ag.group_id = ANY($1)
 			AND a.deleted_at IS NULL
+			AND ` + ordinaryAccountAliasedSQLPredicate + `
 			AND a.status = $2
 			AND a.schedulable = TRUE
 			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
-		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(groupIDs), service.StatusActive, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -2045,9 +2061,13 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 }
 
 func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	if !isOrdinaryAccountPlatform(platform) {
+		return []service.Account{}, nil
+	}
 	now := time.Now()
 	accounts, err := r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -2065,6 +2085,9 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 }
 
 func (r *accountRepository) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]service.Account, error) {
+	if !isOrdinaryAccountPlatform(platform) {
+		return []service.Account{}, nil
+	}
 	// 单平台查询复用多平台逻辑，保持过滤条件与排序策略一致。
 	return r.queryAccountsByGroup(ctx, groupID, accountGroupQueryOptions{
 		status:      service.StatusActive,
@@ -2074,14 +2097,16 @@ func (r *accountRepository) ListSchedulableByGroupIDAndPlatform(ctx context.Cont
 }
 
 func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
+	platforms = ordinaryAccountPlatforms(platforms)
 	if len(platforms) == 0 {
-		return nil, nil
+		return []service.Account{}, nil
 	}
 	// 仅返回可调度的活跃账号，并过滤处于过载/限流窗口的账号。
 	// 代理与分组信息统一在 accountsToService 中批量加载，避免 N+1 查询。
 	now := time.Now()
 	accounts, err := r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -2099,9 +2124,13 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 }
 
 func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	if !isOrdinaryAccountPlatform(platform) {
+		return []service.Account{}, nil
+	}
 	now := time.Now()
 	accounts, err := r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -2120,12 +2149,14 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 }
 
 func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
+	platforms = ordinaryAccountPlatforms(platforms)
 	if len(platforms) == 0 {
-		return nil, nil
+		return []service.Account{}, nil
 	}
 	now := time.Now()
 	accounts, err := r.client.Account.Query().
 		Where(
+			ordinaryAccountPredicate(),
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -2144,8 +2175,9 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 }
 
 func (r *accountRepository) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
+	platforms = ordinaryAccountPlatforms(platforms)
 	if len(platforms) == 0 {
-		return nil, nil
+		return []service.Account{}, nil
 	}
 	// 复用按分组查询逻辑，保证分组优先级 + 账号优先级的排序与筛选一致。
 	return r.queryAccountsByGroup(ctx, groupID, accountGroupQueryOptions{
@@ -2165,6 +2197,7 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	platforms []string,
 	includeGrouped bool,
 ) ([]service.Account, error) {
+	platforms = ordinaryAccountPlatforms(platforms)
 	if len(platforms) == 0 {
 		return []service.Account{}, nil
 	}
@@ -2178,6 +2211,7 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	}
 
 	preds := []dbpredicate.Account{
+		ordinaryAccountPredicate(),
 		dbaccount.StatusEQ(service.StatusActive),
 		dbaccount.SchedulableEQ(true),
 		dbaccount.PlatformIn(platforms...),
@@ -2558,6 +2592,7 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 		SET schedulable = FALSE,
 			updated_at = NOW()
 		WHERE deleted_at IS NULL
+			AND `+ordinaryAccountSQLPredicate+`
 			AND schedulable = TRUE
 			AND auto_pause_on_expired = TRUE
 			AND expires_at IS NOT NULL
@@ -3012,7 +3047,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	// Defense in depth: HF credentials are mutable only through the dedicated
 	// repository even if a caller omits the service-level isolation check.
-	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL AND platform <> 'huggingface'"
+	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL AND " + ordinaryAccountSQLPredicate
 	args = append(args, pq.Array(ids))
 	idx++
 	if updates.ProbeEnabled != nil {
@@ -3100,8 +3135,8 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		Where(dbaccountgroup.GroupIDEQ(groupID))
 
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
-	preds := make([]dbpredicate.Account, 0, 6)
-	preds = append(preds, dbaccount.DeletedAtIsNil())
+	preds := make([]dbpredicate.Account, 0, 7)
+	preds = append(preds, dbaccount.DeletedAtIsNil(), ordinaryAccountPredicate())
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -3488,6 +3523,7 @@ func (r *accountRepository) FindByExtraField(ctx context.Context, key string, va
 	accounts, err := r.client.Account.Query().
 		Where(
 			dbaccount.DeletedAtIsNil(),
+			ordinaryAccountPredicate(),
 			func(s *entsql.Selector) {
 				path := sqljson.Path(key)
 				switch v := value.(type) {
@@ -3550,7 +3586,7 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 		return nil, errors.New("account repository SQL executor not configured")
 	}
 
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		WITH candidates AS (
 			SELECT
 				id,
@@ -3558,6 +3594,7 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 				extra #>> '{upstream_billing_probe,next_probe_at}' AS next_probe_at
 			FROM accounts
 			WHERE deleted_at IS NULL
+				AND ` + ordinaryAccountSQLPredicate + `
 				AND status = 'active'
 				AND type = 'apikey'
 				AND extra @> '{"upstream_billing_probe_enabled": true}'::jsonb
@@ -3608,8 +3645,8 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 			END ASC,
 			CASE WHEN valid_next_probe_at THEN parsed_next_probe_at::timestamptz END ASC NULLS FIRST,
 			id ASC
-		LIMIT $2
-	`, now.UTC(), limit)
+		LIMIT $2`
+	rows, err := r.sql.QueryContext(ctx, query, now.UTC(), limit)
 	if err != nil {
 		return nil, err
 	}

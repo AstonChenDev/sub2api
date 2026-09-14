@@ -824,9 +824,12 @@ func ProvideHuggingFaceService(
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	protector HFCredentialProtector,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 	cfg *config.Config,
 ) *HuggingFaceService {
 	svc := NewHuggingFaceService(repo, cache, accountRepo, groupRepo, protector, cfg)
+	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
 }

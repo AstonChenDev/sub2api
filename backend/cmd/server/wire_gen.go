@@ -228,7 +228,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	huggingFaceRepository := repository.NewHuggingFaceRepository(db)
 	huggingFaceCache := repository.NewHuggingFaceCache(redisClient)
 	hfCredentialProtector := repository.NewHFCredentialProtector(configConfig)
-	huggingFaceService := service.ProvideHuggingFaceService(huggingFaceRepository, huggingFaceCache, accountRepository, groupRepository, hfCredentialProtector, configConfig)
+	huggingFaceService := service.ProvideHuggingFaceService(huggingFaceRepository, huggingFaceCache, accountRepository, groupRepository, hfCredentialProtector, leaderLockCache, db, configConfig)
 	huggingFaceHandler := admin.NewHuggingFaceHandler(huggingFaceService)
 	proxyHandler := admin.NewProxyHandler(adminService)
 	adminRedeemHandler := admin.NewRedeemHandler(adminService, redeemService)

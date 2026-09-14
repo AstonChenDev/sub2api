@@ -114,6 +114,74 @@ func (c *hfTestCache) RebuildPoolIndex(ctx context.Context, _ int64, loader func
 	return err
 }
 
+func TestHuggingFaceMaintenanceJob_OnlyOneBlueGreenInstanceRuns(t *testing.T) {
+	lockCache := &fakeLeaderLockCache{}
+	serviceA := &HuggingFaceService{lockCache: lockCache, instanceID: "blue"}
+	serviceB := &HuggingFaceService{lockCache: lockCache, instanceID: "green"}
+	jobEntered := make(chan struct{})
+	releaseJob := make(chan struct{})
+	jobFinished := make(chan error, 1)
+
+	// 让蓝实例在任务体内保持运行，以稳定模拟蓝绿容器同时存活的生产场景。
+	go func() {
+		_, err := serviceA.runMaintenanceJob(context.Background(), "reconcile", func(context.Context) error {
+			close(jobEntered)
+			<-releaseJob
+			return nil
+		})
+		jobFinished <- err
+	}()
+
+	select {
+	case <-jobEntered:
+	case <-time.After(time.Second):
+		t.Fatal("蓝实例未在预期时间内进入维护任务")
+	}
+
+	greenRuns := 0
+	executed, err := serviceB.runMaintenanceJob(context.Background(), "recover", func(context.Context) error {
+		greenRuns++
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, executed, "锁被蓝实例持有时，绿实例必须跳过本轮维护")
+	require.Zero(t, greenRuns, "未获得租约的实例绝不能进入任务体")
+
+	close(releaseJob)
+	select {
+	case err = <-jobFinished:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("蓝实例维护任务未在预期时间内退出")
+	}
+
+	executed, err = serviceB.runMaintenanceJob(context.Background(), "recover", func(context.Context) error {
+		greenRuns++
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, executed, "蓝实例释放租约后，绿实例应立即具备接管能力")
+	require.Equal(t, 1, greenRuns)
+}
+
+func TestHuggingFaceMaintenanceJob_ReleasesLeaseAfterEveryCycle(t *testing.T) {
+	lockCache := &fakeLeaderLockCache{}
+	svc := &HuggingFaceService{lockCache: lockCache, instanceID: "single-instance"}
+	runs := 0
+
+	// 周期任务完成后必须主动释放租约，否则单实例会在下一轮把自己误判成从实例。
+	for range 3 {
+		executed, err := svc.runMaintenanceJob(context.Background(), "periodic_reconcile", func(context.Context) error {
+			runs++
+			return nil
+		})
+		require.NoError(t, err)
+		require.True(t, executed)
+		require.Empty(t, lockCache.heldBy(hfMaintenanceLeaderLockKey))
+	}
+	require.Equal(t, 3, runs)
+}
+
 type hfTestAccounts struct {
 	AccountRepository
 	requested []int64
@@ -436,4 +504,13 @@ func TestHuggingFaceRawGatewayLifecycle(t *testing.T) {
 		require.Equal(t, http.StatusOK, ginCtx.Writer.Status())
 		require.Positive(t, ginCtx.Writer.Size())
 	})
+}
+
+func TestHuggingFacePoolsForGroup_ReplacesInvalidCacheEntry(t *testing.T) {
+	pool := HuggingFacePool{ID: 10, GroupID: 7, Status: StatusActive}
+	svc := &HuggingFaceService{repo: &hfTestRepo{pools: []HuggingFacePool{pool}}}
+	svc.poolCache.Store(int64(7), "invalid")
+	pools, err := svc.poolsForGroup(context.Background(), 7)
+	require.NoError(t, err)
+	require.Equal(t, []HuggingFacePool{pool}, pools)
 }

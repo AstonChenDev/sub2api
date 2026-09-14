@@ -315,11 +315,22 @@ func (s *AccountRepoSuite) TestList() {
 }
 
 func (s *AccountRepoSuite) TestGenericListsExcludeDedicatedHuggingFaceCredentials() {
-	normal := mustCreateAccount(s.T(), s.client, &service.Account{Name: "normal-account"})
+	normal := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "normal-account",
+		Platform: service.PlatformOpenAI,
+		Extra: map[string]any{
+			"scope_marker":   "shared-marker",
+			"crs_account_id": "crs-normal",
+		},
+	})
 	hfCredential := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "hidden-hf-credential",
 		Platform: service.PlatformHuggingFace,
 		Type:     service.AccountTypeAPIKey,
+		Extra: map[string]any{
+			"scope_marker":   "shared-marker",
+			"crs_account_id": "crs-hf",
+		},
 	})
 
 	accounts, page, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
@@ -341,6 +352,57 @@ func (s *AccountRepoSuite) TestGenericListsExcludeDedicatedHuggingFaceCredential
 	s.Require().NoError(err)
 	s.Require().Len(opsAccounts, 1)
 	s.Require().Equal(normal.ID, opsAccounts[0].ID)
+
+	activeAccounts, err := s.repo.ListActive(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(activeAccounts))
+
+	byHFPlatform, err := s.repo.ListByPlatform(s.ctx, service.PlatformHuggingFace)
+	s.Require().NoError(err)
+	s.Require().Empty(byHFPlatform)
+
+	schedulable, err := s.repo.ListSchedulable(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(schedulable))
+
+	loads, err := s.repo.ListSchedulableAccountLoads(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Len(loads, 1)
+	s.Require().Equal(normal.ID, loads[0].ID)
+
+	byPlatforms, err := s.repo.ListSchedulableByPlatforms(s.ctx, []string{
+		service.PlatformHuggingFace,
+		service.PlatformOpenAI,
+	})
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(byPlatforms))
+
+	ungrouped, err := s.repo.ListSchedulableUngroupedByPlatforms(s.ctx, []string{
+		service.PlatformOpenAI,
+		service.PlatformHuggingFace,
+	})
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(ungrouped))
+
+	availability, err := s.repo.ListModelAvailabilityCandidates(
+		s.ctx,
+		nil,
+		[]string{service.PlatformOpenAI, service.PlatformHuggingFace},
+		true,
+	)
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(availability))
+
+	byExtra, err := s.repo.FindByExtraField(s.ctx, "scope_marker", "shared-marker")
+	s.Require().NoError(err)
+	s.Require().Equal([]int64{normal.ID}, accountIDs(byExtra))
+
+	crsAccount, err := s.repo.GetByCRSAccountID(s.ctx, "crs-hf")
+	s.Require().NoError(err)
+	s.Require().Nil(crsAccount)
+	crsIDs, err := s.repo.ListCRSAccountIDs(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal(map[string]int64{"crs-normal": normal.ID}, crsIDs)
 
 	hasHF, err := s.repo.HasHuggingFaceAccounts(s.ctx, []int64{normal.ID, hfCredential.ID})
 	s.Require().NoError(err)

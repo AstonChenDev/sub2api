@@ -31,7 +31,7 @@ func (r *groupRepository) ListHuggingFaceCapacityByGroupIDs(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	result := make([]service.GroupAccountCapacityRow, 0)
 	for rows.Next() {
 		var row service.GroupAccountCapacityRow

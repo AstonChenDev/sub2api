@@ -64,6 +64,8 @@ func TestListSchedulableAccountLoadsUsesSingleProjectionQuery(t *testing.T) {
 	require.NotContains(t, selectClause, "proxy_id")
 	require.NotContains(t, normalized, "account_groups")
 	require.NotContains(t, normalized, "proxies")
+	require.Contains(t, normalized, `"platform" <>`,
+		"普通调度负载投影不得扫描 HF 专用凭证")
 	for _, predicateColumn := range []string{
 		"status",
 		"schedulable",

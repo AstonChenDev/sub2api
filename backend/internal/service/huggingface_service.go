@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,9 +16,19 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
+)
+
+const (
+	// hfMaintenanceLeaderLockKey 让蓝绿实例共享同一把维护锁。恢复与全量重建
+	// 使用同一个 key，避免一个实例恢复凭据时另一个实例同时发布旧索引快照。
+	hfMaintenanceLeaderLockKey = "huggingface:maintenance:leader"
+	// HF 维护任务自身受 5/10 分钟 context 硬超时约束。租约必须严格长于最长任务，
+	// 防止任务尚未退出时锁先过期；实例崩溃后又能在有限时间内自动恢复竞选。
+	hfMaintenanceLeaderLockTTL = 15 * time.Minute
 )
 
 type hfPoolCacheEntry struct {
@@ -35,6 +46,12 @@ type HuggingFaceService struct {
 	groups    GroupRepository
 	protector HFCredentialProtector
 	cfg       config.HuggingFaceConfig
+
+	// lockCache/db 复用项目统一的“Redis 优先、PostgreSQL advisory lock 兜底”
+	// 选主机制。instanceID 是进程级唯一所有者标识，安全释放时会校验所有权。
+	lockCache  LeaderLockCache
+	db         *sql.DB
+	instanceID string
 
 	poolCache        sync.Map
 	pendingReconcile sync.Map
@@ -61,7 +78,19 @@ func NewHuggingFaceService(
 	return &HuggingFaceService{
 		repo: repo, cache: cache, accounts: accounts, groups: groups,
 		protector: protector, cfg: hfCfg, stopCh: make(chan struct{}),
+		instanceID: uuid.NewString(),
 	}
+}
+
+// SetLeaderLock 注入跨实例维护锁。生产环境同时注入 Redis 与 PostgreSQL：
+// Redis 正常时使用带 TTL 的轻量锁，Redis 异常时退回会话级 advisory lock。
+// 两者均未配置时保持单实例/单元测试的原有行为，不会静默停掉维护任务。
+func (s *HuggingFaceService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
+	if s == nil {
+		return
+	}
+	s.lockCache = lockCache
+	s.db = db
 }
 
 func applyHuggingFaceRuntimeDefaults(cfg *config.HuggingFaceConfig) {
@@ -136,7 +165,7 @@ func (s *HuggingFaceService) Stop() {
 
 func (s *HuggingFaceService) runMaintenance() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	if err := s.ReconcileAll(ctx); err != nil {
+	if _, err := s.runMaintenanceJob(ctx, "initial_reconcile", s.ReconcileAll); err != nil {
 		logger.L().Warn("hugging face initial index reconciliation failed", zap.Error(err))
 	}
 	cancel()
@@ -151,18 +180,52 @@ func (s *HuggingFaceService) runMaintenance() {
 			return
 		case <-recoveryTicker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			if _, err := s.RecoverDue(ctx, 100_000); err != nil {
+			_, err := s.runMaintenanceJob(ctx, "recover_due", func(jobCtx context.Context) error {
+				_, recoverErr := s.RecoverDue(jobCtx, 100_000)
+				return recoverErr
+			})
+			if err != nil {
 				logger.L().Warn("hugging face credential recovery failed", zap.Error(err))
 			}
 			cancel()
 		case <-reconcileTicker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			if err := s.ReconcileAll(ctx); err != nil {
+			if _, err := s.runMaintenanceJob(ctx, "periodic_reconcile", s.ReconcileAll); err != nil {
 				logger.L().Warn("hugging face index reconciliation failed", zap.Error(err))
 			}
 			cancel()
 		}
 	}
+}
+
+// runMaintenanceJob 在跨实例租约内执行一次维护任务。
+//
+// 返回值 executed=false 表示租约正由另一个蓝绿实例持有，本实例应安静跳过本轮；
+// 这不是错误，也不应产生周期性告警。任务结束后立即按 owner 比较并释放，崩溃时
+// 则依靠 TTL 自动释放。任务 context 的最长 10 分钟小于 15 分钟租约，因此正常路径
+// 不会出现“任务仍在运行但租约已经过期”的双执行窗口。
+func (s *HuggingFaceService) runMaintenanceJob(
+	ctx context.Context,
+	job string,
+	run func(context.Context) error,
+) (executed bool, err error) {
+	if s == nil || run == nil {
+		return false, nil
+	}
+	release, acquired := tryAcquireSingletonLeaderLock(
+		ctx,
+		s.lockCache,
+		s.db,
+		hfMaintenanceLeaderLockKey,
+		s.instanceID,
+		hfMaintenanceLeaderLockTTL,
+	)
+	if !acquired {
+		logger.L().Debug("hugging face maintenance skipped because another instance is leader", zap.String("job", job))
+		return false, nil
+	}
+	defer release()
+	return true, run(ctx)
 }
 
 func (s *HuggingFaceService) validateGroup(ctx context.Context, groupID int64) error {
@@ -589,8 +652,8 @@ func (s *HuggingFaceService) invalidateGroupPools(groupID int64) {
 
 func (s *HuggingFaceService) poolsForGroup(ctx context.Context, groupID int64) ([]HuggingFacePool, error) {
 	if cached, ok := s.poolCache.Load(groupID); ok {
-		entry := cached.(hfPoolCacheEntry)
-		if time.Now().Before(entry.expiresAt) {
+		entry, valid := cached.(hfPoolCacheEntry)
+		if valid && time.Now().Before(entry.expiresAt) {
 			return append([]HuggingFacePool(nil), entry.pools...), nil
 		}
 	}
@@ -616,7 +679,11 @@ func (s *HuggingFaceService) poolsForGroup(ctx context.Context, groupID int64) (
 	if err != nil {
 		return nil, err
 	}
-	return append([]HuggingFacePool(nil), value.([]HuggingFacePool)...), nil
+	pools, ok := value.([]HuggingFacePool)
+	if !ok {
+		return nil, fmt.Errorf("invalid Hugging Face pool cache result")
+	}
+	return append([]HuggingFacePool(nil), pools...), nil
 }
 
 func hfModelMatches(patterns []string, model string) bool {

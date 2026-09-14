@@ -125,7 +125,7 @@ func (r *huggingFaceRepository) ListPoolsByGroup(ctx context.Context, groupID in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	pools := make([]service.HuggingFacePool, 0)
 	for rows.Next() {
 		pool := service.HuggingFacePool{}
@@ -160,7 +160,7 @@ func (r *huggingFaceRepository) ListActivePools(ctx context.Context) ([]service.
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	pools := make([]service.HuggingFacePool, 0)
 	for rows.Next() {
 		pool := service.HuggingFacePool{}
@@ -297,7 +297,7 @@ func (r *huggingFaceRepository) ListCredentialRefs(ctx context.Context, poolID i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	refs := make([]service.HFCredentialRef, 0)
 	for rows.Next() {
 		ref := service.HFCredentialRef{PoolID: poolID}
@@ -338,7 +338,7 @@ func (r *huggingFaceRepository) ListCredentials(ctx context.Context, poolID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		item := service.HFCredentialListItem{PoolID: poolID}
 		var upstreamStatusCode sql.NullInt64
@@ -443,7 +443,7 @@ func (r *huggingFaceRepository) RecoverDueCredentials(ctx context.Context, now t
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	refs := make([]service.HFCredentialRef, 0)
 	for rows.Next() {
 		ref := service.HFCredentialRef{}

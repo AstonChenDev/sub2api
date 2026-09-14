@@ -46,6 +46,8 @@ func TestListModelAvailabilityCandidates_GroupQueryIgnoresTransientState(t *test
 	for _, configuredPredicate := range []string{"group_id", "status", "schedulable", "platform"} {
 		require.Contains(t, whereClause, configuredPredicate)
 	}
+	require.GreaterOrEqual(t, strings.Count(whereClause, "platform"), 2,
+		"平台白名单之外还必须存在独立的 HF 专用凭证隔离条件")
 	for _, transientPredicate := range []string{
 		"rate_limit_reset_at",
 		"overload_until",

@@ -275,7 +275,7 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	repo := newAccountRepositoryWithSQL(nil, captureQuerySQL{db: db, captured: &capturedSQL, args: &capturedArgs}, nil)
 
 	page, err := repo.ListOAuthRefreshCandidatePage(context.Background(), service.OAuthRefreshPageOptions{
-		Platforms:            []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGemini, service.PlatformAntigravity, service.PlatformGrok},
+		Platforms:            []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGemini, service.PlatformAntigravity, service.PlatformGrok, service.PlatformHuggingFace},
 		AfterID:              100,
 		Limit:                200,
 		ActiveOnly:           true,
@@ -288,6 +288,7 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 
 	normalized := normalizeSQLWhitespace(capturedSQL)
 	require.Contains(t, normalized, "deleted_at IS NULL")
+	require.Contains(t, normalized, ordinaryAccountSQLPredicate)
 	require.Contains(t, normalized, "schedulable = TRUE",
 		"permanently unschedulable accounts must not remain OAuth refresh candidates")
 	require.Contains(t, normalized, "status = 'active'")
@@ -316,6 +317,7 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	platforms, err := valuer.Value()
 	require.NoError(t, err)
 	require.Contains(t, platforms, service.PlatformGrok)
+	require.NotContains(t, platforms, service.PlatformHuggingFace)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -344,6 +346,23 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_ReconciliationExcludesA
 		"reconciliation must be able to find structurally invalid OAuth rows")
 	require.Contains(t, normalized, "ORDER BY id ASC")
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAccountRepository_ListOAuthRefreshCandidatePage_HuggingFaceOnlySkipsQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	repo := newAccountRepositoryWithSQL(nil, db, nil)
+	page, err := repo.ListOAuthRefreshCandidatePage(context.Background(), service.OAuthRefreshPageOptions{
+		Platforms: []string{service.PlatformHuggingFace},
+		Limit:     50,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, page.Accounts)
+	require.False(t, page.HasMore)
+	require.NoError(t, mock.ExpectationsWereMet(), "HF 专用凭证不应触发普通 OAuth 刷新扫描")
 }
 
 type captureQuerySQL struct {

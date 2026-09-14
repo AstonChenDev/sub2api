@@ -154,9 +154,9 @@ func TestListDueUpstreamBillingProbeAccountsSelectsEarliestDueAcrossIDs(t *testi
 	require.Equal(t, want, got)
 }
 
-// 探测资格放宽回归：任何 API-key 平台的启用账号都进入定时探测候选并按
-// 到期时间排序；OAuth 与未启用账号仍被排除。
-func TestListDueUpstreamBillingProbeAccountsIncludesAllAPIKeyPlatforms(t *testing.T) {
+// 探测资格放宽回归：任何普通 API-key 平台的启用账号都进入定时探测候选并按
+// 到期时间排序；OAuth、未启用账号和 HF 专用凭证仍被排除。
+func TestListDueUpstreamBillingProbeAccountsIncludesAllOrdinaryAPIKeyPlatforms(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
@@ -186,6 +186,7 @@ func TestListDueUpstreamBillingProbeAccountsIncludesAllAPIKeyPlatforms(t *testin
 	openaiDue := insert("probe-openai-due", "openai", service.AccountTypeAPIKey, "2026-07-26T02:57:00Z")
 	anthropicDue := insert("probe-anthropic-due", "anthropic", service.AccountTypeAPIKey, "2026-07-26T02:58:00Z")
 	grokDue := insert("probe-grok-due", "grok", service.AccountTypeAPIKey, "2026-07-26T02:59:00Z")
+	_ = insert("probe-hf-dedicated-excluded", service.PlatformHuggingFace, service.AccountTypeAPIKey, "2026-07-26T02:56:00Z")
 	// OAuth 账号即便误持有启用标记也不得入选。
 	_ = insert("probe-grok-oauth-excluded", "grok", service.AccountTypeOAuth, "2026-07-26T02:59:00Z")
 	// 未启用探测的 API-key 账号不入选。
