@@ -63,6 +63,7 @@ type hfTestCache struct {
 	rotateCalls   int
 	rotateIDs     []int64
 	removed       int
+	removedIDs    map[int64]struct{}
 	cooled        int
 	failures      int
 	cleared       int
@@ -79,7 +80,13 @@ func (c *hfTestCache) ListPriorities(_ context.Context, _ int64, limit int) ([]i
 }
 func (c *hfTestCache) RotateCandidates(context.Context, int64, int, int, time.Time) ([]int64, error) {
 	c.rotateCalls++
-	return append([]int64(nil), c.rotateIDs...), nil
+	ids := make([]int64, 0, len(c.rotateIDs))
+	for _, id := range c.rotateIDs {
+		if _, removed := c.removedIDs[id]; !removed {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 func (c *hfTestCache) PoolCooldownRemaining(context.Context, int64) (time.Duration, error) {
 	return 0, nil
@@ -90,8 +97,12 @@ func (c *hfTestCache) PickWeightedPool(_ context.Context, _ int64, pools []Huggi
 	}
 	return pools[0].ID, nil
 }
-func (c *hfTestCache) RemoveCredential(context.Context, HFCredentialRef) error {
+func (c *hfTestCache) RemoveCredential(_ context.Context, ref HFCredentialRef) error {
 	c.removed++
+	if c.removedIDs == nil {
+		c.removedIDs = make(map[int64]struct{})
+	}
+	c.removedIDs[ref.AccountID] = struct{}{}
 	return nil
 }
 func (c *hfTestCache) CooldownCredential(context.Context, HFCredentialRef, time.Time) error {
@@ -331,6 +342,97 @@ func TestHuggingFaceFailureLifecycle(t *testing.T) {
 	require.NotNil(t, failover)
 	require.Equal(t, HFDisabledReasonInvalidToken, repo.transition.Reason)
 	require.Equal(t, 2, cache.removed)
+}
+
+func TestHuggingFaceNoRemainingCreditsStopsScheduling(t *testing.T) {
+	for _, body := range []string{
+		`{"error":"You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers."}`,
+		`{"error":{"message":"You have no remaining credits. Alternatively, subscribe to PRO to get monthly included credits."}}`,
+		`{"message":"You have NO REMAINING CREDITS."}`,
+		`{"error":"You have no\nremaining   credits."}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			repo := &hfTestRepo{}
+			cache := &hfTestCache{}
+			svc := newHFTestService(repo, cache, &hfTestAccounts{})
+			account := &Account{
+				ID: 7, Platform: PlatformHuggingFace, Type: AccountTypeAPIKey,
+				Extra: map[string]any{"hf_pool_id": "10", "hf_token_fingerprint": "fingerprint"},
+			}
+
+			failover := svc.ObserveHTTPFailure(context.Background(), account, http.StatusPaymentRequired, nil, []byte(body))
+
+			require.NotNil(t, failover)
+			require.Equal(t, StatusDisabled, repo.transition.Status)
+			require.False(t, repo.transition.Schedulable)
+			require.Equal(t, "credits_exhausted", repo.transition.Reason)
+			require.Nil(t, repo.transition.ReadyAt, "empty credits must not re-enter the five-minute retry loop")
+			require.Nil(t, repo.transition.RecoverAt, "remaining credits do not imply a monthly allowance will be granted")
+			require.Equal(t, http.StatusPaymentRequired, *repo.transition.UpstreamStatusCode)
+			require.Contains(t, repo.transition.ErrorMessage, "HTTP 402")
+			require.Equal(t, 1, cache.removed)
+			require.Zero(t, cache.cooled)
+			require.Empty(t, failover.ResponseHeaders.Get("Retry-After"))
+		})
+	}
+}
+
+func TestHuggingFaceCreditExhaustionDoesNotDisableOtherFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		reason string
+	}{
+		{"temporary billing", http.StatusPaymentRequired, `{"error":"insufficient balance"}`, HFTemporaryReasonBillingRequired},
+		{"unrelated metadata", http.StatusPaymentRequired, `{"error":"billing verification unavailable","metadata":"no remaining credits"}`, HFTemporaryReasonBillingRequired},
+		{"rate limit", http.StatusTooManyRequests, `{"error":"no remaining credits"}`, HFTemporaryReasonRateLimited},
+		{"provider failure", http.StatusServiceUnavailable, `{"error":"no remaining credits"}`, HFTemporaryReasonTransient},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &hfTestRepo{pools: []HuggingFacePool{{ID: 10}}}
+			cache := &hfTestCache{}
+			svc := newHFTestService(repo, cache, &hfTestAccounts{})
+			account := &Account{
+				ID: 7, Platform: PlatformHuggingFace, Type: AccountTypeAPIKey,
+				Extra: map[string]any{"hf_pool_id": "10", "hf_token_fingerprint": "fingerprint"},
+			}
+
+			require.NotNil(t, svc.ObserveHTTPFailure(context.Background(), account, tc.status, nil, []byte(tc.body)))
+			require.Equal(t, StatusActive, repo.transition.Status)
+			require.True(t, repo.transition.Schedulable)
+			require.Equal(t, tc.reason, repo.transition.Reason)
+			require.NotNil(t, repo.transition.ReadyAt)
+			require.Nil(t, repo.transition.RecoverAt)
+			require.Zero(t, cache.removed)
+			require.Equal(t, 1, cache.cooled)
+		})
+	}
+}
+
+func TestHuggingFaceCreditExhaustionKeepsOtherCredentialsSchedulable(t *testing.T) {
+	repo := &hfTestRepo{pools: []HuggingFacePool{{ID: 10, GroupID: 1, Status: StatusActive, Models: []string{"*"}}}}
+	cache := &hfTestCache{priorities: []int{50}, rotateIDs: []int64{7, 8}}
+	accounts := &hfTestAccounts{}
+	svc := newHFTestService(repo, cache, accounts)
+	exhausted := &Account{
+		ID: 7, Platform: PlatformHuggingFace, Type: AccountTypeAPIKey,
+		Extra: map[string]any{"hf_pool_id": "10", "hf_token_fingerprint": "fingerprint"},
+	}
+
+	failover := svc.ObserveHTTPFailure(context.Background(), exhausted, http.StatusPaymentRequired, nil,
+		[]byte(`{"error":"You have no remaining credits."}`))
+	require.NotNil(t, failover)
+	require.Equal(t, NextAccountRetry, failover.NextAccountAction)
+	require.Zero(t, cache.failures, "one exhausted credential must not trip the entire pool circuit")
+
+	groupID := int64(1)
+	candidates, err := svc.CandidateAccounts(context.Background(), &groupID, "test-model", nil)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.EqualValues(t, 8, candidates[0].ID)
+	require.True(t, candidates[0].IsSchedulable())
+	require.Equal(t, []int64{8}, accounts.requested, "only the exhausted key should leave the rotation")
 }
 
 func TestHuggingFaceModelWildcardAndMonthlyRecovery(t *testing.T) {

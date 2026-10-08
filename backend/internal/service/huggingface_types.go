@@ -17,6 +17,7 @@ const (
 	HFMaxCredentialImport = 100_000
 
 	HFDisabledReasonMonthlyExhausted = "monthly_included_credits_exhausted"
+	HFDisabledReasonCreditsExhausted = "credits_exhausted"
 	HFDisabledReasonInvalidToken     = "invalid_token"
 	HFDisabledReasonForbidden        = "forbidden"
 	HFDisabledReasonDecryptFailed    = "credential_decrypt_failed"

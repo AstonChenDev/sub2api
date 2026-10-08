@@ -226,6 +226,7 @@ function credentialStatusLabel(item: HFCredentialItem) {
 function credentialReasonLabel(reason?: string) {
   switch (reason) {
     case 'monthly_included_credits_exhausted': return t('admin.huggingface.reasonMonthlyExhausted')
+    case 'credits_exhausted': return t('admin.huggingface.reasonCreditsExhausted')
     case 'invalid_token': return t('admin.huggingface.reasonInvalidToken')
     case 'forbidden': return t('admin.huggingface.reasonForbidden')
     case 'credential_decrypt_failed': return t('admin.huggingface.reasonDecryptFailed')

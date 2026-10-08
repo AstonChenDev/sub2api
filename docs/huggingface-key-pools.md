@@ -89,6 +89,11 @@ redirects, preventing a token from being forwarded to a redirect target.
 
 - `401`: permanently disables the token.
 - `403`: permanently disables the token for insufficient permission.
+- `402` with `no remaining credits`: disables the token with reason
+  `credits_exhausted`, without an automatic recovery time. Add credits or restore
+  the account's paid allowance before using the admin credential recovery action.
+  A zero balance does not imply monthly credits will be granted, so neither the
+  billing cooldown nor the monthly recovery worker retries these credentials.
 - `402` with the Hugging Face monthly-included-credit exhaustion message:
   disables the token until day 1 of the next month at the configured local hour.
 - Other `402`: temporary billing cooldown.

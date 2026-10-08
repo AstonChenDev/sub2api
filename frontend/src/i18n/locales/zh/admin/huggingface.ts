@@ -38,6 +38,7 @@ export default {
     statusError: '错误（已停用）',
     statusPaused: '暂停调度',
     reasonMonthlyExhausted: '月度赠送额度已耗尽',
+    reasonCreditsExhausted: '额度已用完，补充余额后恢复',
     reasonInvalidToken: 'Token 无效',
     reasonForbidden: '权限不足',
     reasonDecryptFailed: 'Token 解密失败',

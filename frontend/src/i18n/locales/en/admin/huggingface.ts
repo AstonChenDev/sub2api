@@ -38,6 +38,7 @@ export default {
     statusError: 'Error (disabled)',
     statusPaused: 'Scheduling paused',
     reasonMonthlyExhausted: 'Monthly included credits exhausted',
+    reasonCreditsExhausted: 'Credits exhausted; restore after adding credits',
     reasonInvalidToken: 'Invalid token',
     reasonForbidden: 'Insufficient permission',
     reasonDecryptFailed: 'Token decryption failed',

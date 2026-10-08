@@ -999,6 +999,13 @@ func (s *HuggingFaceService) ObserveHTTPFailure(ctx context.Context, account *Ac
 		transition.Status, transition.Schedulable = StatusDisabled, false
 		transition.Reason = HFDisabledReasonForbidden
 		transition.ErrorMessage = "Hugging Face credential does not have permission"
+	case status == http.StatusPaymentRequired && isHFNoRemainingCredits(body):
+		// No remaining balance does not imply an included monthly allowance.
+		// Keep the credential out of rotation until billing is restored and an
+		// administrator explicitly recovers it, rather than retrying every 5m.
+		transition.Status, transition.Schedulable = StatusDisabled, false
+		transition.Reason = HFDisabledReasonCreditsExhausted
+		transition.ErrorMessage = "Hugging Face credits are exhausted; restore billing before recovering the credential"
 	case status == http.StatusPaymentRequired && isHFMonthlyIncludedCreditsExhausted(body):
 		recoverAt := s.RecoverAtForMonthlyExhaustion(now)
 		transition.Status, transition.Schedulable = StatusDisabled, false
@@ -1128,6 +1135,17 @@ func (s *HuggingFaceService) retryAfter(headers http.Header, fallback time.Durat
 		return min(delay, maxDelay)
 	}
 	return fallback
+}
+
+func isHFNoRemainingCredits(body []byte) bool {
+	message := extractUpstreamErrorMessage(body)
+	if strings.TrimSpace(message) == "" {
+		if errorValue := gjson.GetBytes(body, "error"); errorValue.Type == gjson.String {
+			message = errorValue.String()
+		}
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(message), " "))
+	return strings.Contains(text, "no remaining credits")
 }
 
 func isHFMonthlyIncludedCreditsExhausted(body []byte) bool {
