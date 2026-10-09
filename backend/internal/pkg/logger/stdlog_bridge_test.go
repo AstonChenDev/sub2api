@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+// Drain captured logs while writing so error stacktraces cannot fill the pipe.
+func capturePipeOutput(r io.Reader) <-chan []byte {
+	result := make(chan []byte, 1)
+	go func() {
+		output, _ := io.ReadAll(r)
+		result <- output
+	}()
+	return result
+}
+
 func TestInferStdLogLevel(t *testing.T) {
 	cases := []struct {
 		msg  string
@@ -59,6 +69,8 @@ func TestStdLogBridgeRoutesLevels(t *testing.T) {
 		_ = stderrR.Close()
 		_ = stderrW.Close()
 	})
+	stdoutResult := capturePipeOutput(stdoutR)
+	stderrResult := capturePipeOutput(stderrR)
 
 	if err := Init(InitOptions{
 		Level:       "debug",
@@ -81,8 +93,8 @@ func TestStdLogBridgeRoutesLevels(t *testing.T) {
 
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	stdoutBytes, _ := io.ReadAll(stdoutR)
-	stderrBytes, _ := io.ReadAll(stderrR)
+	stdoutBytes := <-stdoutResult
+	stderrBytes := <-stderrResult
 	stdoutText := string(stdoutBytes)
 	stderrText := string(stderrBytes)
 
@@ -121,6 +133,8 @@ func TestLegacyPrintfRoutesLevels(t *testing.T) {
 		_ = stderrR.Close()
 		_ = stderrW.Close()
 	})
+	stdoutResult := capturePipeOutput(stdoutR)
+	stderrResult := capturePipeOutput(stderrR)
 
 	if err := Init(InitOptions{
 		Level:       "debug",
@@ -143,8 +157,8 @@ func TestLegacyPrintfRoutesLevels(t *testing.T) {
 
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	stdoutBytes, _ := io.ReadAll(stdoutR)
-	stderrBytes, _ := io.ReadAll(stderrR)
+	stdoutBytes := <-stdoutResult
+	stderrBytes := <-stderrResult
 	stdoutText := string(stdoutBytes)
 	stderrText := string(stderrBytes)
 
